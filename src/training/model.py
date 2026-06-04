@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -23,12 +21,6 @@ class RoPE(nn.Module):
         rotated_even = x_even * cos - x_odd * sin
         rotated_odd = x_even * sin + x_odd * cos
         return torch.stack((rotated_even, rotated_odd), dim=-1).flatten(-2)
-
-
-@dataclass(slots=True)
-class ForwardScheduleConfig:
-    train_max_seq_len: int
-
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, model_dim: int, num_heads: int, head_dim: int, max_seq_len: int):
@@ -116,8 +108,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, input_seq: Tensor, target_seq: Tensor, schedule_cfg: ForwardScheduleConfig) -> Tensor:
-        del schedule_cfg
+    def forward(self, input_seq: Tensor, target_seq: Tensor) -> Tensor:
         x = self.token_embed(input_seq)
         for block in self.blocks:
             x = block(x)

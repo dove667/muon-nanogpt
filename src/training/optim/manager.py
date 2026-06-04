@@ -1,15 +1,13 @@
-import copy
 import math
 
 import torch
 
-from model import ForwardScheduleConfig
 from optim.core import NorMuonAndAdam
 from config import TRAINING, OPTIMIZER
 
 
-def _compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
-                warmup_frac: float | None = None, min_lr_frac: float | None = None) -> float:
+def compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
+               warmup_frac: float | None = None, min_lr_frac: float | None = None) -> float:
     wf = TRAINING.warmup_frac if warmup_frac is None else warmup_frac
     mlf = TRAINING.min_lr_frac if min_lr_frac is None else min_lr_frac
     if total_steps <= 1:
@@ -27,7 +25,7 @@ def _is_matrix_param(name: str, param: torch.nn.Parameter) -> bool:
     return param.ndim >= 2 and "token_embed" not in name and "lm_head" not in name
 
 
-def _build_param_table(model, orth_mode: str) -> dict[str, dict]:
+def build_param_table(model, orth_mode: str) -> dict[str, dict]:
     table: dict[str, dict] = {}
     for name, param in model.named_parameters():
         label = getattr(param, "label", name.replace(".weight", ""))
@@ -41,60 +39,38 @@ def _build_param_table(model, orth_mode: str) -> dict[str, dict]:
     return table
 
 
-class TrainingManager:
-    def __init__(self, model, *, device, total_steps, lr_mul, orth_mode, polar_express, grad_accum_steps):
-        self.model = model
-        self.device = device
-        self.orth_mode = orth_mode
-        self.total_steps = total_steps
-        self.global_train_tokens = 0
-        self.grad_accum_steps = grad_accum_steps
-        self.train_loader_send_args = None
+def build_optimizer(model, *, orth_mode: str, lr_mul: float, polar_express) -> NorMuonAndAdam:
+    param_table = build_param_table(model, orth_mode)
+    work_order = list(param_table)
 
-        self.param_table = _build_param_table(model, orth_mode)
-        self.work_order = list(self.param_table)
+    adam_cfg = OPTIMIZER.adam_defaults
+    muon_cfg = OPTIMIZER.muon_defaults
+    adam_defaults = dict(lr=adam_cfg.lr, eps=adam_cfg.eps, weight_decay=adam_cfg.weight_decay)
+    normuon_defaults = dict(
+        lr=muon_cfg.lr * lr_mul,
+        momentum=muon_cfg.momentum,
+        beta2=muon_cfg.beta2,
+        weight_decay=muon_cfg.weight_decay,
+    )
 
-        adam_cfg = OPTIMIZER.adam_defaults
-        muon_cfg = OPTIMIZER.muon_defaults
-        adam_defaults = dict(lr=adam_cfg.lr, eps=adam_cfg.eps, weight_decay=adam_cfg.weight_decay)
-        normuon_defaults = dict(
-            lr=muon_cfg.lr * lr_mul,
-            momentum=muon_cfg.momentum,
-            beta2=muon_cfg.beta2,
-            weight_decay=muon_cfg.weight_decay,
-        )
+    return NorMuonAndAdam(
+        model.named_parameters(),
+        param_table=param_table,
+        scatter_order=list(param_table),
+        work_order=work_order,
+        adam_defaults=adam_defaults,
+        normuon_defaults=normuon_defaults,
+        orthogonalize_fn=polar_express,
+    )
 
-        self.optimizer = NorMuonAndAdam(
-            model.named_parameters(),
-            param_table=self.param_table,
-            scatter_order=list(self.param_table),
-            work_order=self.work_order,
-            adam_defaults=adam_defaults,
-            normuon_defaults=normuon_defaults,
-            orthogonalize_fn=polar_express,
-        )
-        self.reset()
 
-    def get_forward_args(self):
-        return ForwardScheduleConfig(train_max_seq_len=self.train_max_seq_len)
+def step_optimizer(optimizer: NorMuonAndAdam, *, step: int, total_steps: int) -> None:
+    step_lr = compute_lr(step, total_steps)
+    muon_momentum = OPTIMIZER.muon_defaults.momentum
 
-    def step_optimizers(self, step: int):
-        step_lr = _compute_lr(step, self.total_steps)
-        muon_momentum = OPTIMIZER.muon_defaults.momentum
+    for param_cfg in optimizer.param_cfgs.values():
+        param_cfg.lr = param_cfg.initial_lr * step_lr
+        if param_cfg.optim == "normuon":
+            param_cfg.momentum = muon_momentum
 
-        for _, param_cfg in self.optimizer.param_cfgs.items():
-            param_cfg.lr = param_cfg.initial_lr * step_lr
-            if param_cfg.optim == "normuon":
-                param_cfg.momentum = muon_momentum
-
-        self.optimizer.step(do_adam=True)
-
-    def reset(self, state=None):
-        if state is not None:
-            self.optimizer.load_state_dict(state)
-        self.optimizer.reset()
-        self.batch_size = TRAINING.batch_tokens
-        self.train_max_seq_len = TRAINING.seq_len
-
-    def get_state(self):
-        return copy.deepcopy(self.optimizer.state_dict())
+    optimizer.step(do_adam=True)

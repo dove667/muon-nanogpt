@@ -7,8 +7,8 @@ import torch
 from torch import nn
 
 from model import GPT
-from optim import TrainingManager
-from orth import OrthogonalizerConfig, build_orthogonalizer_config, make_polar_express
+from optim import build_optimizer
+from orth import build_coeff_schedule, make_polar_express, orth_norm_factor, orth_record
 from run_support import Logger, run_training_loop, setup_device
 from config import TRAINING, MODEL, OPTIMIZER, get_orthogonalization
 
@@ -52,10 +52,20 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def dispatch_orth_config(orth: str) -> tuple[OrthogonalizerConfig, object, float]:
+def dispatch_orth_state(orth: str) -> tuple[list[tuple[float, float, float]], float, dict[str, object], float]:
     orth_cfg = get_orthogonalization()
-    orth_config = build_orthogonalizer_config(
-        orth_mode=orth,
+    coeff_schedule = build_coeff_schedule(
+        orth,
+        fast_steps=int(orth_cfg.fast_steps),
+        stable_steps=int(orth_cfg.stable_steps),
+        pe_lower_bound_raw=orth_cfg.pe_lower_bound,
+        pe_cushion=float(orth_cfg.pe_cushion),
+        pe_safety_factor=float(orth_cfg.pe_safety_factor),
+    )
+    norm_factor = orth_norm_factor(orth, float(orth_cfg.pe_safety_factor))
+    record = orth_record(
+        orth,
+        coeff_schedule,
         fast_steps=int(orth_cfg.fast_steps),
         stable_steps=int(orth_cfg.stable_steps),
         pe_lower_bound_raw=orth_cfg.pe_lower_bound,
@@ -63,12 +73,8 @@ def dispatch_orth_config(orth: str) -> tuple[OrthogonalizerConfig, object, float
         pe_safety_factor=float(orth_cfg.pe_safety_factor),
         lr_mul=float(OPTIMIZER.lr_mul),
     )
-    polar_express = make_polar_express(
-        coeff_schedule=orth_config.coeff_schedule,
-        norm_factor=orth_config.norm_factor,
-    )
-    base_lr = OPTIMIZER.base_lr_adamw if orth == "adamw" else OPTIMIZER.base_lr_muon
-    return orth_config, polar_express, base_lr
+    base_lr = float(OPTIMIZER.base_lr_adamw if orth == "adamw" else OPTIMIZER.base_lr_muon)
+    return coeff_schedule, norm_factor, record, base_lr
 
 
 def build_model(device: torch.device) -> nn.Module:
@@ -91,7 +97,11 @@ def main() -> None:
     run_dir = (Path(__file__).resolve().parents[2] / "runs" / args.name).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    orth_config, polar_express, base_lr = dispatch_orth_config(args.orth)
+    coeff_schedule, norm_factor, orth_record_data, base_lr = dispatch_orth_state(args.orth)
+    polar_express = make_polar_express(
+        coeff_schedule=coeff_schedule,
+        norm_factor=norm_factor,
+    )
     train_files, val_files = _resolve_data_files(args.data_path)
 
     train_steps = math.ceil(TRAINING.train_token_budget / TRAINING.batch_tokens)
@@ -101,7 +111,7 @@ def main() -> None:
         seed=args.seed,
         base_lr=base_lr,
         train_token_budget=TRAINING.train_token_budget,
-        orth_config=orth_config,
+        orth_record=orth_record_data,
         run_dir=run_dir,
     )
 
@@ -118,33 +128,29 @@ def main() -> None:
     print("=" * 100)
 
     model = build_model(device)
-
-    training_manager = TrainingManager(
+    optimizer = build_optimizer(
         model,
-        device=device,
-        total_steps=train_steps,
-        lr_mul=orth_config.lr_mul,
-        orth_mode=orth_config.orth_mode,
+        orth_mode=args.orth,
+        lr_mul=float(OPTIMIZER.lr_mul),
         polar_express=polar_express,
-        grad_accum_steps=TRAINING.grad_accum_steps,
     )
 
     run_training_loop(
         model=model,
-        training_manager=training_manager,
+        optimizer=optimizer,
+        device=device,
         train_files=train_files,
         val_files=val_files,
         val_tokens=TRAINING.eval_tokens,
         train_steps=train_steps,
-        grad_accum_steps=TRAINING.grad_accum_steps,
         logger=logger,
         log_every_steps=TRAINING.log_every_steps,
         eval_every_tokens=TRAINING.eval_every_tokens,
         spectral_every_tokens=TRAINING.spectral_every_tokens,
         spectral_max_matrices=TRAINING.spectral_max_matrices,
         spectral_max_dim=TRAINING.spectral_max_dim,
-        polar_express_coeffs=tuple(tuple(c) for c in orth_config.coeff_schedule),
-        orth_norm_factor=orth_config.norm_factor,
+        polar_express_coeffs=tuple(tuple(c) for c in coeff_schedule),
+        orth_norm_factor=norm_factor,
     )
 
 
