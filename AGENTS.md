@@ -7,7 +7,7 @@
 
 ## 训练入口
 
-- 单次训练（纯训练模式，无额外同步开销）：`python -m src.training.train --orth <mode> --seed <n> --data-path /data/fineweb10B`
+- 单次训练（纯训练模式，无额外同步开销）：`python -m src.training.train --orth <mode> --data-path /data/fineweb10B`
 - BenchMark 模式（测量 wall-clock 吞吐）：`python -m src.training.train ... --benchmark`
 - 谱分析模式（采集优化器状态频谱）：`python -m src.training.train ... --spectral`
 - 162M 模型 4090 单卡完全够用，无分布式逻辑
@@ -16,7 +16,7 @@
 
 - **`src/config/config.yaml`** 是唯一配置来源，包含所有固定训练/模型/优化器/正交化超参数
 - `src/config/` 负责 YAML 加载，导出 `TRAINING` `MODEL` `OPTIMIZER` 模块级常量
-- train.py CLI 仅暴露必须变化的 3 个参数：`--data-path` `--orth` `--seed`，外加 `--benchmark` / `--spectral` 控制诊断模式
+- train.py CLI 仅暴露必须变化的 2 个参数：`--data-path` `--orth`，外加 `--benchmark` / `--spectral` 控制诊断模式
 
 ## 五种 orth 模式
 
@@ -78,7 +78,7 @@ src/
 
 训练完成后依次运行：
 1. `python -m src.analysis.summarize_runs` → `results/run_summary.csv` + `results/orth_summary.csv`
-2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / val_loss_vs_wall / final_val_loss）
+2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / benchmark_wall_clock / final_val_loss）
 
 ## 项目约定
 

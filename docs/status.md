@@ -2,7 +2,7 @@
 
 ## 当前阶段：fixed T=5 对照实验
 
-- 5 配置 × 1 seed = 5 runs（不再考虑种子随机性）
+- 5 配置 × 固定 seed 1 次 = 5 runs（不再考虑种子随机性）
 - 训练入口：`python -m src.training.train --orth <mode> --data-path /data`
 - 三种模式分开跑：纯训练（默认）/ Benchmark（`--benchmark`）/ Spectral（`--spectral`）
 - 默认模式零 `torch.cuda.synchronize()` 开销
@@ -20,6 +20,10 @@
 - 删除了 `experiment_plan.py`（编排层）、data_generator 动态重配置分支
 - 训练循环拆分为三种独立模式，各自无交叉开销
 - 去除所有竞速 trick（参数银行、softcap logits、ReLU² MLP、QK norm 等）
+- 训练入口移除 CLI seed，固定 seed 写死在代码内，run 名改为时间戳
+- 数据读取改为按 shard 流式加载，避免一次性把全部数据 pin 到内存
+- 修复 spectral 模式参数名错误、AdamW 模式学习率日志、final val loss 取值错误
+- benchmark 只记录端到端总时间，分析图同步改为总 wall-clock 柱状图
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
 
 ## 固定训练栈

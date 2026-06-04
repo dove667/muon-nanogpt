@@ -55,8 +55,8 @@ def _val_points(run: dict, x_key: str) -> list[tuple[float, float]]:
     ]
 
 
-def _final_metric(run: dict, key: str) -> float | None:
-    for row in run["rows"]:
+def _last_metric(run: dict, key: str) -> float | None:
+    for row in reversed(run["rows"]):
         if key in row:
             return float(row[key])
     return None
@@ -97,38 +97,37 @@ def plot_val_loss_vs_tokens(runs: list[dict], out_dir: Path) -> None:
     plt.close()
 
 
-def plot_val_loss_vs_wall_time(runs: list[dict], out_dir: Path) -> None:
-    """One val/loss curve per orth vs wall time (only if benchmark data exists)."""
+def plot_benchmark_wall_clock(runs: list[dict], out_dir: Path) -> None:
+    """Bar chart of end-to-end benchmark wall-clock time per orth."""
     import matplotlib.pyplot as plt
 
     grouped: dict[str, list[dict]] = defaultdict(list)
     for run in runs:
         grouped.setdefault(run.get("orth", ""), []).append(run)
 
-    plt.figure(figsize=(10, 6))
-    any_series = False
+    labels, values, colors = [], [], []
     for orth in ORTH_ORDER:
         orth_runs = grouped.get(orth, [])
-        by_x: dict[float, list[float]] = defaultdict(list)
+        wall_times = []
         for run in orth_runs:
-            for x, y in _val_points(run, "val/global_wall_time_s"):
-                by_x[x].append(y)
-        if not by_x:
+            wall_time = _last_metric(run, "benchmark/wall_clock_s")
+            if wall_time is not None:
+                wall_times.append(wall_time)
+        if not wall_times:
             continue
-        xs = sorted(by_x)
-        ys = [mean(by_x[x]) for x in xs]
-        any_series = True
-        plt.plot(xs, ys, color=ORTH_COLOR[orth], linewidth=2.2, label=ORTH_LABEL[orth])
-    if not any_series:
-        plt.close()
+        labels.append(ORTH_LABEL[orth])
+        values.append(mean(wall_times))
+        colors.append(ORTH_COLOR[orth])
+    if not labels:
         return
-    plt.xlabel("wall time (s)")
-    plt.ylabel("val/loss")
-    plt.title("Validation loss by wall time")
-    plt.grid(True, alpha=0.25)
-    plt.legend()
+    plt.figure(figsize=(8, 5))
+    plt.bar(range(len(labels)), values, color=colors)
+    plt.xticks(range(len(labels)), labels)
+    plt.ylabel("wall time (s)")
+    plt.title("End-to-end benchmark wall clock")
+    plt.grid(True, axis="y", alpha=0.25)
     plt.tight_layout()
-    plt.savefig(out_dir / "val_loss_vs_wall.png", dpi=180)
+    plt.savefig(out_dir / "benchmark_wall_clock.png", dpi=180)
     plt.close()
 
 
@@ -145,7 +144,7 @@ def plot_final_val_loss_bars(runs: list[dict], out_dir: Path) -> None:
         orth_runs = grouped.get(orth, [])
         orth_values = []
         for run in orth_runs:
-            v = _final_metric(run, "val/loss")
+            v = _last_metric(run, "val/loss")
             if v is not None:
                 orth_values.append(v)
         if not orth_values:
@@ -182,7 +181,7 @@ def main() -> int:
         return 0
 
     plot_val_loss_vs_tokens(runs, out_dir)
-    plot_val_loss_vs_wall_time(runs, out_dir)
+    plot_benchmark_wall_clock(runs, out_dir)
     plot_final_val_loss_bars(runs, out_dir)
     print(f"Wrote figures to {out_dir}")
     return 0

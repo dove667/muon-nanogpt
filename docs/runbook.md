@@ -24,17 +24,17 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 ## 1. 单次训练
 
 ```bash
-python -m src.training.train --orth fast --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth fast --data-path /data/fineweb10B
 ```
 
 五种 orth 模式：
 
 ```bash
-python -m src.training.train --orth adamw         --seed 0 --data-path /data/fineweb10B
-python -m src.training.train --orth vanilla       --seed 0 --data-path /data/fineweb10B
-python -m src.training.train --orth fast          --seed 0 --data-path /data/fineweb10B
-python -m src.training.train --orth manual        --seed 0 --data-path /data/fineweb10B
-python -m src.training.train --orth polar_express --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth adamw         --data-path /data/fineweb10B
+python -m src.training.train --orth vanilla       --data-path /data/fineweb10B
+python -m src.training.train --orth fast          --data-path /data/fineweb10B
+python -m src.training.train --orth manual        --data-path /data/fineweb10B
+python -m src.training.train --orth polar_express --data-path /data/fineweb10B
 ```
 
 ### 参数
@@ -42,12 +42,12 @@ python -m src.training.train --orth polar_express --seed 0 --data-path /data/fin
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `--orth` | str | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
-| `--seed` | int | `0` | 随机种子 |
 | `--data-path` | str | **必传** | 数据集根目录 |
 | `--benchmark` | flag | False | 开启 wall-clock 计时（含 cuda synchronize） |
 | `--spectral` | flag | False | 采集优化器状态频谱指标 |
 
 默认模式下训练循环无 `torch.cuda.synchronize()` 开销。`--benchmark` 和 `--spectral` 应分开跑。
+随机种子固定写死在代码里，不通过 CLI 暴露；run 名使用时间戳，避免复跑时覆盖或追加到旧日志。
 
 所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `src/config/config.yaml` 中管理。
 
@@ -67,7 +67,7 @@ python -m src.analysis.summarize_runs
 python -m src.analysis.plot_curves
 ```
 
-输出：`results/figures/` 下 val_loss_vs_tokens / val_loss_vs_wall / final_val_loss
+输出：`results/figures/` 下 `val_loss_vs_tokens` / `benchmark_wall_clock` / `final_val_loss`
 
 ## 3. 数据下载
 
@@ -81,7 +81,7 @@ python scripts/download_fineweb.py [num_chunks]
 
 | 文件 | 内容 |
 |---|---|
-| `config.json` | 实验配置快照（run_name、seed、base_lr、train_token_budget、orth_config） |
+| `config.json` | 实验配置快照（run_name、固定 seed、base_lr、train_token_budget、orth_config） |
 | `metrics.jsonl` | 每步一条 JSON（训练指标、验证指标、谱指标） |
 
 分析脚本读取 `runs/` 并输出到 `results/`：

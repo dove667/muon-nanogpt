@@ -1,4 +1,5 @@
 import random
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -6,8 +7,10 @@ import torch
 
 from src.config import get_orthogonalization
 
+FIXED_SEED = 0
 
-def setup_device(*, base_seed: int) -> torch.device:
+
+def setup_device(*, base_seed: int = FIXED_SEED) -> torch.device:
     assert torch.cuda.is_available()
     device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
@@ -20,18 +23,19 @@ def setup_device(*, base_seed: int) -> torch.device:
     return device
 
 
-def default_run_name(orth: str, seed: int) -> str:
+def default_run_name(orth: str) -> str:
     orth_cfg = get_orthogonalization()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     if orth == "adamw":
-        return f"adamw_seed{seed}"
+        return f"adamw_{timestamp}"
     if orth == "vanilla":
-        return f"vanilla_seed{seed}"
+        return f"vanilla_{timestamp}"
     if orth == "fast":
-        return f"fast_seed{seed}"
+        return f"fast_{timestamp}"
     if orth == "manual":
-        return f"manual_f{orth_cfg.fast_steps}_s{orth_cfg.stable_steps}_seed{seed}"
+        return f"manual_f{orth_cfg.fast_steps}_s{orth_cfg.stable_steps}_{timestamp}"
     if orth == "polar_express":
-        return f"polar_express_l{orth_cfg.pe_lower_bound}_seed{seed}"
+        return f"polar_express_l{orth_cfg.pe_lower_bound}_{timestamp}"
     raise SystemExit(f"Unknown orth={orth}")
 
 
@@ -47,7 +51,10 @@ def resolve_data_path(data_path: str) -> tuple[str, str]:
 
 
 def primary_lr(optimizer) -> float:
+    fallback_lr = None
     for param_cfg in optimizer.param_cfgs.values():
         if param_cfg.optim == "normuon":
             return float(param_cfg.lr * param_cfg.lr_mul)
-    return float("nan")
+        if fallback_lr is None and param_cfg.optim == "adam":
+            fallback_lr = float(param_cfg.lr * param_cfg.lr_mul)
+    return float("nan") if fallback_lr is None else fallback_lr

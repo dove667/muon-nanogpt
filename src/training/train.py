@@ -11,7 +11,7 @@ from src.model.gpt import build_model
 from src.optim import build_optimizer, step_optimizer
 from src.optim import build_coeff_schedule, make_polar_express, orth_norm_factor, orth_record
 from src.config import TRAINING, OPTIMIZER, get_orthogonalization
-from src.training.utils import default_run_name, resolve_data_path, setup_device, primary_lr
+from src.training.utils import FIXED_SEED, default_run_name, resolve_data_path, setup_device, primary_lr
 from src.training.logger import Logger
 from src.data import data_generator
 from src.training.metrics import collect_spectral_metrics
@@ -21,14 +21,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch one configured training run.")
     parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"],
                         default="fast", help="Orthogonalization strategy")
-    parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--data-path", required=True, help="Path to training data directory")
     parser.add_argument("--benchmark", action="store_true",
                         help="Enable wall-clock timing measurements (adds cuda synchronize)")
     parser.add_argument("--spectral", action="store_true",
                         help="Enable spectral metric collection on optimizer states")
     args = parser.parse_args()
-    args.name = default_run_name(args.orth, args.seed)
+    args.name = default_run_name(args.orth)
     return args
 
 
@@ -172,8 +171,8 @@ def run_training_loop(
                 optimizer,
                 global_train_tokens=global_train_tokens,
                 master_process=True,
-                spectral_max_matrices=TRAINING.spectral_num_matrices,
-                spectral_max_dim=TRAINING.spectral_dim_cap,
+                num_matrices=TRAINING.spectral_num_matrices,
+                svd_dim_cap=TRAINING.spectral_dim_cap,
                 coeffs=polar_express_coeffs,
                 norm_factor=orth_norm_factor,
             )
@@ -201,7 +200,7 @@ def main() -> None:
     args = parse_args()
 
     run_dir = (Path(__file__).resolve().parents[2] / "runs" / args.name).resolve()
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=False)
 
     coeff_schedule, norm_factor, orth_record_data, base_lr = dispatch_orth_state(args.orth)
     polar_express = make_polar_express(coeff_schedule=coeff_schedule, norm_factor=norm_factor)
@@ -209,7 +208,7 @@ def main() -> None:
 
     logger = Logger(
         run_name=args.name,
-        seed=args.seed,
+        seed=FIXED_SEED,
         base_lr=base_lr,
         orth_record=orth_record_data,
         run_dir=run_dir,
@@ -224,7 +223,7 @@ def main() -> None:
         print(f"mode:     spectral")
     print("=" * 80)
 
-    device = setup_device(base_seed=args.seed)
+    device = setup_device(base_seed=FIXED_SEED)
 
     print(f"PyTorch {torch.__version__}  CUDA {torch.version.cuda}")
     print(f"Python  {sys.version}")
