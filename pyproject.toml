@@ -1,0 +1,19 @@
+[project]
+name = "muon-nanogpt"
+version = "0.1.0"
+description = "Muon / Newton-Schulz 正交化调度在 GPT 预训练中的研究"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "huggingface-hub>=0.20",
+    "wandb>=0.16",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

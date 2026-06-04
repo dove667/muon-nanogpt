@@ -1,0 +1,196 @@
+\documentclass[10pt]{article}
+
+\usepackage[letterpaper,margin=0.62in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt}
+\setlist[enumerate]{leftmargin=1.4em,itemsep=1pt,topsep=2pt}
+\titlespacing*{\section}{0pt}{5pt}{2pt}
+
+\title{\vspace{-1.2em}\textbf{Initial Proposal: Spectral Analysis of Newton--Schulz Schedules for the Muon Optimizer}}
+\author{Yicheng Zhao, Sihua Zhang, Ruilin Gao\\COE202 Mathematical Foundations of AI, Spring 2026}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.2em}
+
+\textbf{Project type.}
+This project is an original empirical research project with a mathematical optimization focus. It follows the COE202 project direction on understanding the Muon optimizer and its Newton--Schulz coefficients.
+
+\section*{Motivation}
+
+Muon optimizes hidden-layer weight matrices by first forming a momentum update and then post-processing it into an approximately semi-orthogonal matrix using a small number of Newton--Schulz polynomial iterations \cite{jordan2024muon}. This mechanism is particularly attractive for our study because the coefficients $(a,b,c)$ in the quintic Newton--Schulz map implicitly determine the spectral transformation applied to the update matrix, and hence modify the effective geometry of the optimizer. Thus, what appears to be a low-level parametrization choice can induce nontrivial changes in the optimization dynamics. Recent work has also studied the convergence properties of Muon and related matrix-sign optimization methods \citep{kim2026convergence,amsel2025polar,moddednanogpt2024}.
+
+The central question of this project is: \textit{How do Newton--Schulz coefficient schedules affect validation loss, wall-clock efficiency, stability, and update orthogonality in LLM pretraining?}
+Rather than treating Muon as a black-box optimizer, we interpret the coefficient schedule as defining a spectral iteration. Its fixed points, derivatives, attracting and repelling regions, and approximation to the matrix sign or polar factor determine how aggressively the optimizer orthogonalizes the update direction. This perspective connects the course themes of optimization, matrix iterations, and machine learning experimentation.
+
+% \section*{Preliminary Work}
+
+% Following the modded-nanoGPT repository \citep{moddednanogpt2024}, we pretrained nanoGPT-124M under a fixed experimental setup and benchmarked optimizer variants by changing only the Newton--Schulz coefficient schedule. All runs use the same model architecture, dataset, training horizon, and non-optimizer hyperparameters, so that differences in performance can be attributed primarily to the optimizer geometry. The training data are drawn from a cached GPT-2-tokenized FineWeb stream derived from FineWeb \citep{penedo2024fineweb}.
+
+% As a feasibility check, we constructed a systematic multi-stage evaluation pipeline. The first stage performs a broad screen over vanilla Muon, manually designed phase-based schedules, and initial Polar Express  schedules\citep{amsel2025polar}. The second stage expands the most promising Polar Express region by sweeping lower bounds, iteration counts, and learning rates. The final stage promotes the strongest candidates from the grid search to longer main runs and multi-seed final comparisons. In total, we completed 120 controlled runs, including calibration runs, schedule grids, a 100M-token main screen, and a 300M-token three-seed final comparison.
+
+% The final candidates were selected from the 100M-token screen: the strongest Polar Express schedule, the strongest manual fast-to-stable schedule, and the vanilla Muon baseline. Current preliminary results are:
+
+% \begin{center}
+% \small
+% \begin{tabular}{lccc}
+% \toprule
+% Schedule & Final val. loss, mean $\pm$ std  & Update orth. error \\
+% \midrule
+% Polar Express, $T=9,\ell=3{\times}10^{-5}$ & $3.45205 \pm 0.00257$ & $0.0110$ \\
+% Vanilla Muon, five fast steps & $3.45223 \pm 0.00086$ & $0.3662$ \\
+% Manual $P2(T=9,f=3,s=6)$ & $3.45345 \pm 0.00203$ & $0.0539$ \\
+% \bottomrule
+% \end{tabular}
+% \end{center}
+
+% These results establish that the experimental pipeline is feasible and that different coefficient schedules induce substantially different spectral behavior. In particular, the schedules achieve comparable validation loss while producing markedly different update orthogonality errors. However, the current validation-loss gaps remain small relative to seed-level variation, so the preliminary evidence does not yet support a universal claim that any single schedule dominates. The final analysis will therefore evaluate coefficient schedules jointly in terms of validation loss, token efficiency, wall-clock cost, stability, and update geometry.
+
+% \section*{Proposed Work}
+
+% Let $M_t$ be the matrix momentum update for a hidden-layer weight matrix. We normalize it as $X_0=M_t/\lVert M_t\rVert_F$ and apply a sequence of Newton--Schulz-style maps
+% \[
+% X_{k+1}=a_kX_k+\left(b_kX_kX_k^\top+c_k(X_kX_k^\top)^2\right)X_k.
+% \]
+% If $X_k=U\operatorname{diag}(s_k)V^\top$, then each singular value evolves by the scalar polynomial
+% \[
+% s_{k+1}=a_ks_k+b_ks_k^3+c_ks_k^5.
+% \]
+% Thus, the coefficient schedule determines how quickly small singular directions are amplified, how close the final update is to a polar factor, and how much compute is spent per optimizer step.
+
+% The proposed investigation has four parts:
+% \begin{enumerate}
+%   \item \textbf{Mathematical analysis of the singular-value iteration.} For each coefficient sequence, study the composed map $p_{0:T}$ using elementary tools from sequences and one-dimensional dynamics: fixed points $p(s)=s$, local stability through $|p'(s)|$, attracting intervals around $s\approx1$, repelling regions near zero, lower-bound sensitivity, and the induced orthogonality error $\lVert X_T^\top X_T-I\rVert_F$. This should predict which schedules are fast, stable, or over-aggressive before running the full benchmark.
+%   \item \textbf{Vanilla Muon baseline.} Use the five-step fast coefficient schedule
+%   \[
+%   F=(3.4445,-4.7750,2.0315)
+%   \]
+%   as the primary baseline, matching the course prompt and the Muon/modded-nanoGPT literature.
+%   \item \textbf{Manual fast-to-stable schedules.} Compare
+%   \[
+%   P2(T,f)=\underbrace{F,\ldots,F}_{f\text{ steps}}+\underbrace{S,\ldots,S}_{T-f\text{ steps}},
+%   \quad S=(2,-1.5,0.5),
+%   \]
+%   for $T=5,\ldots,10$ and all fast/stable splits. This tests whether aggressive early amplification followed by more stable refinement improves training.
+%   \item \textbf{Polar Express schedules.} Compare manual schedules with Polar Express coefficient sequences, parameterized by the iteration count $T$ and lower-bound assumption $\ell$ \citep{amsel2025polar}. This tests whether minimax-designed matrix-sign iterations give a better loss/geometry tradeoff than hand-designed schedules.
+% \end{enumerate}
+
+% The experimental setup will use the same GPT pretraining benchmark for all variants. The main metrics are validation cross-entropy versus tokens and wall-clock time, tokens-to-target, time-to-target, tokens/sec, orthogonalizer time, gradient/update norms, singular-value spread, stable rank, and update orthogonality error. The final report will separate token efficiency from wall-clock efficiency because a more accurate orthogonalizer can still be unattractive if it is too expensive per step.
+
+\section*{Preliminary Work}
+
+Our preliminary work has focused on understanding Muon as a Newton--Schulz-based matrix-sign optimizer and identifying coefficient schedules that are meaningful to compare. Muon applies a small number of polynomial iterations to a matrix momentum update in order to produce an approximately semi-orthogonal update direction \citep{jordan2024muon,moddednanogpt2024}. At the level of singular values, this procedure can be viewed as a scalar polynomial iteration
+\[
+    s_{k+1}=p_k(s_k),
+    \qquad
+    p_k(s)=a_ks+b_ks^3+c_ks^5.
+\]
+Thus, different choices of the coefficients $(a_k,b_k,c_k)$ correspond to different spectral transformations of the update matrix.
+
+We have explored three families of coefficient schedules. The first is the vanilla Muon schedule used in the modded-nanoGPT setting, which repeatedly applies the fast quintic map
+\[
+    F=(3.4445,-4.7750,2.0315).
+\]
+This serves as the main baseline: it represents a short, aggressive Newton--Schulz iteration designed to rapidly push the update toward an approximately semi-orthogonal direction.
+
+The second family consists of manually designed fast-to-stable schedules. These schedules begin with several fast Muon steps and then switch to the classical stable Newton--Schulz coefficients
+\[
+    S=(2,-1.5,0.5).
+\]
+For total iteration count $T$ and fast-step count $f$, the schedule has the form
+\[
+    P2(T,f)
+    =
+    \underbrace{F,\ldots,F}_{f\text{ steps}}
+    +
+    \underbrace{S,\ldots,S}_{T-f\text{ steps}}.
+\]
+This family tests the idea that early aggressive amplification of small singular values may be useful, but that later stable refinement may improve the approximation to the polar factor.
+
+The third family consists of Polar Express schedules, which use coefficient sequences designed for matrix-sign iteration under a lower-bound assumption on the singular values \citep{amsel2025polar}. These schedules are parameterized by an iteration count $T$ and a lower bound $\ell$. Unlike the manual schedules, their coefficients are chosen according to a more principled spectral design criterion. They therefore provide a natural comparison between hand-designed coefficient schedules and schedules derived from matrix-iteration theory.
+
+This preliminary exploration suggests that the project should not treat Muon as a single optimizer, but rather as a family of spectral transformations parameterized by the Newton--Schulz coefficients. The central question is whether the spectral differences among these schedules translate into measurable differences in validation loss, stability, update geometry, and computational efficiency.
+
+\section*{Proposed Work}
+
+The project will combine mathematical analysis of the singular-value iteration with a controlled empirical comparison in LLM pretraining. Let $M_t$ denote the matrix momentum update for a hidden-layer weight matrix. We normalize it as
+\[
+    X_0 = M_t/\lVert M_t\rVert_F
+\]
+and apply a sequence of Newton--Schulz-style maps
+\[
+    X_{k+1}
+    =
+    a_kX_k
+    +
+    \left(
+        b_kX_kX_k^\top
+        +
+        c_k(X_kX_k^\top)^2
+    \right)X_k .
+\]
+If $X_k=U\operatorname{diag}(s_k)V^\top$, then each singular value evolves according to
+\[
+    s_{k+1}
+    =
+    p_k(s_k),
+    \qquad
+    p_k(s)=a_ks+b_ks^3+c_ks^5.
+\]
+The theoretical part of the project will study the composed map
+\[
+    p_{0:T}=p_{T-1}\circ\cdots\circ p_0
+\]
+for each coefficient schedule. Using elementary tools from sequences and one-dimensional dynamics, we will analyze fixed points, local stability through $|p'(s)|$, attracting intervals near $s=1$, slow-growth or repelling regions near $s=0$, sensitivity to the lower-bound parameter, and the induced matrix-level orthogonality error. For rectangular matrices, the orthogonality error will be interpreted in an aspect-ratio-aware way, using either
+\[
+    \lVert X_TX_T^\top-I\rVert_F
+    \quad \text{or} \quad
+    \lVert X_T^\top X_T-I\rVert_F,
+\]
+depending on the intended semi-orthogonal orientation.
+
+The empirical part of the project will use a pretraining benchmark similar to the modded-nanoGPT \citep{moddednanogpt2024}, without extremly aggressive system-level optimization. We pretrain nanoGPT-124M under a fixed experimental setup and vary only the Newton--Schulz coefficient schedule. All runs use the same model architecture, dataset, training horizon, and non-optimizer hyperparameters, so that performance differences can be attributed primarily to the optimizer geometry. The training data are drawn from a cached GPT-2-tokenized FineWeb stream derived from FineWeb \citep{penedo2024fineweb}.
+
+We will use a three-stage evaluation pipeline. The first stage performs a broad grid search over vanilla Muon, manually designed fast-to-stable schedules, and initial Polar Express settings. The second stage expands the most promising Polar Express region by sweeping lower-bound assumptions, iteration counts, and learning rates. The third stage promotes the strongest candidates from the grid search to longer main runs and multi-seed final comparisons. This design allows us to move from broad exploration to controlled final evaluation.
+
+As a feasibility check, we have already completed 120 controlled runs, including calibration runs, schedule grids, a 100M-token main screen, and a 300M-token three-seed final comparison. The final candidates selected from the 100M-token screen are the strongest Polar Express schedule, the strongest manual fast-to-stable schedule, and the vanilla Muon baseline. Current preliminary results are:
+
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+Schedule & Final val. loss, mean $\pm$ std & Update orth. error \\
+\midrule
+Polar Express, $T=9,\ell=3{\times}10^{-5}$ & $3.45205 \pm 0.00257$ & $0.0110$ \\
+Vanilla Muon, five fast steps & $3.45223 \pm 0.00086$ & $0.3662$ \\
+Manual $P2(T=9,f=3,s=6)$ & $3.45345 \pm 0.00203$ & $0.0539$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These results establish that the pipeline is feasible and that different coefficient schedules can produce markedly different update geometries while achieving comparable validation loss. However, the validation-loss gaps are small relative to seed-level variation, so the final report will avoid claiming that any single schedule universally dominates. Instead, it will evaluate each schedule jointly in terms of validation loss, token efficiency, wall-clock efficiency, stability, singular-value behavior, and update orthogonality. The goal is to explain when a more accurate spectral transformation is actually useful for optimization, and when its additional per-step cost outweighs its geometric benefit.
+
+
+\section*{Expected Outcome}
+
+The expected deliverable is a mathematical and empirical comparison of Newton--Schulz coefficient schedules in Muon. We aim to determine how the polynomial singular-value dynamics explain observed training behavior: whether the vanilla Muon fast coefficients are already close to optimal for this benchmark, whether manual fast-to-stable schedules provide a practical compromise, and whether Polar Express improves spectral geometry enough to affect validation loss. In particular, if validation loss remains insensitive across several schedules, we will interpret this through the composed scalar maps and their attracting behavior near the desired singular-value region. A useful outcome may therefore be a nuanced tradeoff rather than a single winner: preliminary results suggest that Polar Express achieves much lower update orthogonality error, vanilla Muon remains cheaper per step, and final validation losses are close.
+
+The final report will include a precise mathematical formulation of the Newton--Schulz singular-value map, an analysis of the composed polynomial dynamics, a reproducible nanoGPT pretraining and evaluation pipeline, validation-loss and wall-clock comparisons, spectral diagnostics of the optimizer updates, and a discussion of limitations.
+
+\begingroup
+\footnotesize
+\setlength{\bibsep}{2pt}
+\bibliographystyle{abbrvnat}
+\bibliography{reference}
+\endgroup
+
+\end{document}
