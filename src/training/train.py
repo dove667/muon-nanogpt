@@ -1,28 +1,38 @@
 import argparse
 import math
-import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 from torch import nn
 
-from model import GPT, setup_model_runtime
+from model import GPT
 from optim import TrainingManager
-from orthogonalization import build_orthogonalizer_config
+from orthogonalization import OrthogonalizerConfig, build_orthogonalizer_config
 from polar import make_polar_express
 from run_support import (
-    LoopConfig,
     RunLogger,
-    nvidia_smi_output,
     run_training_loop,
     setup_device,
 )
-from schedule import Hyperparameters, TrainingSchedule, default_training_stages
+from utils import resolve_data_files
 
-ROOT = Path(__file__).resolve().parents[2]
 FIXED_BATCH_TOKENS = 8 * 2048 * 8
 FIXED_SEQ_LEN = 2048
+
+
+@dataclass(slots=True)
+class Hyperparameters:
+    val_tokens: int = 524288
+    val_batch_size: int = 2048
+    num_scheduled_iterations: int = 1440
+    run_id: str = ""
+    save_checkpoint: bool = False
+    bigram_vocab_size: int = 50304 * 5
+    val_loss_every: int = 0
+    train_files: str = ""
+    val_files: str = ""
 
 
 def default_run_name(args: argparse.Namespace) -> str:
@@ -96,20 +106,31 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def dispatch_orth_config(args: argparse.Namespace) -> tuple[OrthogonalizerConfig, object, float]:
+    orth_config = build_orthogonalizer_config(
+        orth_mode=args.orth,
+        fast_steps=args.fast_steps or 5,
+        stable_steps=args.stable_steps or (max(5 - (args.fast_steps or 5), 0)),
+        pe_lower_bound_raw=args.pe_lower_bound,
+        pe_cushion=args.pe_cushion,
+        pe_safety_factor=args.pe_safety_factor,
+        lr_mul=args.lr_mul,
+    )
+    polar_express = make_polar_express(
+        coeff_schedule=orth_config.coeff_schedule,
+        norm_factor=orth_config.norm_factor,
+    )
+    base_lr = 0.008 if args.orth == "adamw" else 0.023
+    return orth_config, polar_express, base_lr
+
+
 def build_model(
     args: Hyperparameters,
-    training_stages,
     device: torch.device,
+    model_max_seq_len: int,
 ) -> nn.Module:
-    model_max_seq_len = int(
-        os.environ.get(
-            "MODEL_MAX_SEQ_LEN",
-            max(
-                args.val_batch_size,
-                max(stage.train_max_seq_len for stage in training_stages),
-            ),
-        )
-    )
+    if model_max_seq_len <= 0:
+        model_max_seq_len = max(args.val_batch_size, FIXED_SEQ_LEN)
     model = GPT(
         vocab_size=50257,
         num_layers=11,
@@ -117,6 +138,7 @@ def build_model(
         head_dim=128,
         model_dim=768,
         max_seq_len=model_max_seq_len,
+        device=device,
     ).to(device=device)
     for module in model.modules():
         if isinstance(module, (nn.Embedding, nn.Linear)):
@@ -130,12 +152,8 @@ def build_model(
 
 
 def main(args: argparse.Namespace) -> None:
-    run_dir = (ROOT / "runs" / args.name).resolve()
+    run_dir = (Path(__file__).resolve().parents[2] / "runs" / args.name).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.data_path:
-        os.environ["DATA_PATH"] = args.data_path
-    os.environ["PYTHONUNBUFFERED"] = "1"
 
     grad_accum_steps = args.train_grad_accum_steps
     train_steps = math.ceil(args.train_token_budget / FIXED_BATCH_TOKENS)
@@ -143,60 +161,30 @@ def main(args: argparse.Namespace) -> None:
     print("=" * 80)
     print(f"run: {args.name}")
     print(f"orth: {args.orth}")
-    print(f"train_token_budget: {args.train_token_budget}")
-    print(f"train_steps: {train_steps}")
-    print(f"grad_accum: {grad_accum_steps}")
-    print(f"eval_every_tokens: {args.eval_every_tokens}")
-    print(f"eval_tokens: {args.eval_tokens}")
     print("=" * 80)
 
     device = setup_device(base_seed=args.seed)
+    orth_config, polar_express, base_lr = dispatch_orth_config(args)
 
-    orth_state = build_orthogonalizer_config(
-        orth_mode=args.orth,
-        fast_steps=args.fast_steps or 5,
-        stable_steps=args.stable_steps or (max(5 - (args.fast_steps or 5), 0)),
-        pe_lower_bound_raw=args.pe_lower_bound,
-        pe_cushion=args.pe_cushion,
-        pe_safety_factor=args.pe_safety_factor,
-        lr_mul=args.lr_mul,
-    )
-    polar_express = make_polar_express(
-        coeff_schedule=orth_state.coeff_schedule,
-        norm_factor=orth_state.norm_factor,
+    train_files, val_files = resolve_data_files(args.data_path)
+
+    hparams = Hyperparameters(
+        train_files=train_files,
+        val_files=val_files,
+        val_tokens=args.eval_tokens,
+        val_batch_size=args.eval_batch_size,
+        num_scheduled_iterations=train_steps,
     )
 
-    hparams = Hyperparameters()
-    hparams.val_batch_size = args.eval_batch_size
-    hparams.num_scheduled_iterations = train_steps
-
-    training_stages = default_training_stages()
-    training_schedule = TrainingSchedule(
-        training_stages,
-        hparams.num_scheduled_iterations,
-        hparams.num_extension_iterations,
-        device=device,
-    )
-
-    setup_model_runtime(
-        args_value=hparams,
-        grad_accum_steps_value=grad_accum_steps,
-        device_value=device,
-    )
-
-    base_lr = 0.008 if args.orth == "adamw" else 0.023
     logger = RunLogger(
         args=hparams,
-        orth_config=orth_state.to_record(),
-        orth_mode=orth_state.orth_mode,
-        orth_schedule_name=orth_state.schedule_name,
-        lr_mul=orth_state.lr_mul,
+        orth_config=orth_config,
+        base_lr=base_lr,
         train_token_budget=args.train_token_budget,
         eval_every_tokens=args.eval_every_tokens,
         grad_accum_steps=grad_accum_steps,
         device=device,
         seed=args.seed,
-        base_lr=base_lr,
         seq_len=FIXED_SEQ_LEN,
         run_dir=run_dir,
         run_name=args.name,
@@ -204,45 +192,37 @@ def main(args: argparse.Namespace) -> None:
 
     print("=" * 100)
     print(f"Running Python {sys.version}")
-    print(
-        f"Running PyTorch {torch.__version__} compiled for CUDA {torch.version.cuda}"
-    )
+    print(f"Running PyTorch {torch.__version__} compiled for CUDA {torch.version.cuda}")
     print("=" * 100)
 
-    model = build_model(hparams, training_stages, device)
+    model = build_model(hparams, device, args.model_max_seq_len)
 
     training_manager = TrainingManager(
         model,
         device=device,
         args=hparams,
-        training_schedule=training_schedule,
-        lr_mul=orth_state.lr_mul,
-        orth_mode=orth_state.orth_mode,
+        total_steps=train_steps,
+        lr_mul=orth_config.lr_mul,
+        orth_mode=orth_config.orth_mode,
         polar_express=polar_express,
         grad_accum_steps=grad_accum_steps,
-    )
-    loop_config = LoopConfig.from_args(
-        orth_mode=orth_state.orth_mode,
-        orth_schedule_name=orth_state.schedule_name,
-        polar_express_coeffs=orth_state.coeff_schedule,
-        orth_norm_factor=orth_state.norm_factor,
-        log_every_steps=args.log_every_steps,
-        eval_every_tokens=args.eval_every_tokens,
-        eval_at_start=args.eval_at_start,
-        spectral_every_tokens=args.spectral_every_tokens,
-        spectral_max_matrices=args.spectral_max_matrices,
-        spectral_max_dim=args.spectral_max_dim,
     )
 
     run_training_loop(
         model=model,
         training_manager=training_manager,
         args=hparams,
-        training_stages=training_stages,
-        training_schedule=training_schedule,
+        train_steps=train_steps,
         grad_accum_steps=grad_accum_steps,
         logger=logger,
-        loop_config=loop_config,
+        log_every_steps=args.log_every_steps,
+        eval_every_tokens=args.eval_every_tokens,
+        eval_at_start=args.eval_at_start,
+        spectral_every_tokens=args.spectral_every_tokens,
+        spectral_max_matrices=args.spectral_max_matrices,
+        spectral_max_dim=args.spectral_max_dim,
+        polar_express_coeffs=tuple(tuple(c) for c in orth_config.coeff_schedule),
+        orth_norm_factor=orth_config.norm_factor,
     )
 
 

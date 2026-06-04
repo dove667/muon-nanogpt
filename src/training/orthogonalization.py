@@ -1,8 +1,6 @@
 
 import math
-import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
@@ -56,15 +54,6 @@ class OrthogonalizerConfig:
 
 
 def _parse_lower_bound(value: str) -> float:
-    if value == "lemp":
-        empirical = os.environ.get("PE_EMP_LOWER_BOUND")
-        if empirical is None:
-            path = os.environ.get("PE_EMP_LOWER_BOUND_FILE")
-            if path:
-                empirical = Path(path).read_text(encoding="utf-8").strip()
-        if empirical is None:
-            raise RuntimeError("PE_LOWER_BOUND=lemp requires PE_EMP_LOWER_BOUND or PE_EMP_LOWER_BOUND_FILE")
-        value = empirical
     return float(value)
 
 

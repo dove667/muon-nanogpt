@@ -63,7 +63,6 @@ class NorMuonAndAdam:
 
         self._init_state()
 
-        self.split_embed = False
         self._lm_head_param = self._param_by_label.get("lm_head")
         self._embed_param = self._param_by_label.get("embed")
 
@@ -142,25 +141,12 @@ class NorMuonAndAdam:
             )
 
     def reset(self):
-        self.split_embed = False
         for param, param_cfg in self.param_cfgs.items():
             if param_cfg.optim != "normuon":
                 continue
             state = self.param_states[param]
             state["momentum_buffer"].zero_()
             state["second_momentum_buffer"].zero_()
-
-    def copy_lm_state_to_embed(self):
-        lm_head = self._lm_head_param
-        embed = self._embed_param
-        lm_state = self.param_states[lm_head]
-        embed_state = self.param_states[embed]
-
-        embed_state["step"] = lm_state["step"]
-        for key in ["exp_avg", "exp_avg_sq"]:
-            embed_state[key].copy_(lm_state[key].T)
-
-        self.split_embed = True
 
     def state_dict(self):
         return {
@@ -195,10 +181,10 @@ class NorMuonAndAdam:
                 continue
             if param.grad is None:
                 continue
-            if label == "lm_head" and do_adam and not self.split_embed:
+            if label == "lm_head" and do_adam:
                 if embed_param is not None and embed_param.grad is not None:
                     _transpose_add(embed_param.grad, param.grad)
-            if label == "embed" and not self.split_embed:
+            if label == "embed":
                 continue
 
             grad = param.grad
@@ -210,7 +196,7 @@ class NorMuonAndAdam:
             else:
                 self._normuon_update(param, grad, param_cfg)
 
-        if do_adam and not self.split_embed and embed_param is not None and lm_param is not None:
+        if do_adam and embed_param is not None and lm_param is not None:
             _transpose_copy(lm_param.data, embed_param.data)
 
         for param, param_cfg in self.param_cfgs.items():

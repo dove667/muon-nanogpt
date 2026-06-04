@@ -1,12 +1,12 @@
 import gc
 import json
 import math
-import os
 import random
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -14,6 +14,12 @@ from torch import nn
 
 from data_pipeline import data_generator
 from metrics import collect_spectral_metrics, current_grad_norm
+
+FIXED_BATCH_TOKENS = 8 * 2048 * 8
+FIXED_SEQ_LEN = 2048
+
+if TYPE_CHECKING:
+    from orthogonalization import OrthogonalizerConfig
 
 
 def setup_device(*, base_seed: int) -> torch.device:
@@ -43,35 +49,26 @@ class RunLogger:
         self,
         *,
         args,
-        orth_config: dict,
-        orth_mode: str,
-        orth_schedule_name: str,
-        lr_mul: float,
+        orth_config: "OrthogonalizerConfig",
+        base_lr: float,
         train_token_budget: int,
         eval_every_tokens: int,
         grad_accum_steps: int,
         device: torch.device,
         seed: int,
-        base_lr: float,
         seq_len: int,
         run_dir: Path,
         run_name: str,
     ) -> None:
         self.args = args
-        self.orth_mode = orth_mode
-        self.orth_schedule_name = orth_schedule_name
+        self.orth_mode = orth_config.orth_mode
+        self.orth_schedule_name = orth_config.schedule_name
         self.run_dir = run_dir
         self.run_name = run_name
-        self.spectral_details_file = None
-        self.spectral_details_enabled = os.environ.get("SPECTRAL_LOG_DETAILS", "0").lower() in {
-            "1", "true", "yes", "on",
-        }
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.run_dir / "metrics.jsonl"
         self.config_file = self.run_dir / "config.json"
-        if self.spectral_details_enabled:
-            self.spectral_details_file = self.run_dir / "spectral_metrics.jsonl"
 
         run_config = {
             **{
@@ -79,10 +76,10 @@ class RunLogger:
                 for key in dir(args)
                 if not key.startswith("_") and not callable(getattr(args, key))
             },
-            **orth_config,
+            **orth_config.to_record(),
             "run_name": run_name,
             "base_lr": base_lr,
-            "actual_lr": base_lr * lr_mul,
+            "actual_lr": base_lr * orth_config.lr_mul,
             "seed": seed,
             "model_size": "train_gpt_11L_768D",
             "seq_len": seq_len,
@@ -93,7 +90,6 @@ class RunLogger:
             "torch_version": torch.__version__,
             "cuda_version": torch.version.cuda,
             "gpu_name": torch.cuda.get_device_name(device),
-            "spectral_log_details": self.spectral_details_enabled,
         }
         self.config_file.write_text(json.dumps(run_config, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -111,46 +107,9 @@ class RunLogger:
         with self.metrics_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
-    def log_spectral(self, summary_record: dict, detail_records: list[dict], step_value: int | None = None) -> None:
+    def log_spectral(self, summary_record: dict) -> None:
         if summary_record:
-            self.log_metric(summary_record, step_value=step_value)
-        if not self.spectral_details_enabled or not detail_records:
-            return
-        with self.spectral_details_file.open("a", encoding="utf-8") as handle:
-            for record in detail_records:
-                payload = self._with_common_fields(record, step_value=step_value)
-                handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-@dataclass(slots=True)
-class LoopConfig:
-    log_every_steps: int
-    eval_every_tokens: int
-    eval_at_start: bool
-    spectral_every_tokens: int
-    spectral_max_matrices: int
-    spectral_max_dim: int
-    orth_mode: str
-    orth_schedule_name: str
-    polar_express_coeffs: tuple[tuple[float, float, float], ...]
-    orth_norm_factor: float
-
-    @classmethod
-    def from_args(cls, *, orth_mode: str, orth_schedule_name: str, polar_express_coeffs, orth_norm_factor: float,
-                  log_every_steps: int, eval_every_tokens: int, eval_at_start: bool,
-                  spectral_every_tokens: int, spectral_max_matrices: int, spectral_max_dim: int):
-        return cls(
-            log_every_steps=log_every_steps,
-            eval_every_tokens=eval_every_tokens,
-            eval_at_start=eval_at_start,
-            spectral_every_tokens=spectral_every_tokens,
-            spectral_max_matrices=spectral_max_matrices,
-            spectral_max_dim=spectral_max_dim,
-            orth_mode=orth_mode,
-            orth_schedule_name=orth_schedule_name,
-            polar_express_coeffs=tuple(tuple(coeff) for coeff in polar_express_coeffs),
-            orth_norm_factor=orth_norm_factor,
-        )
+            self.log_metric(summary_record)
 
 
 def run_validation(
@@ -211,40 +170,42 @@ def run_training_loop(
     model: nn.Module,
     training_manager,
     args,
-    training_stages,
-    training_schedule,
+    train_steps: int,
     grad_accum_steps: int,
     logger: RunLogger,
-    loop_config: LoopConfig,
+    log_every_steps: int,
+    eval_every_tokens: int,
+    eval_at_start: bool,
+    spectral_every_tokens: int,
+    spectral_max_matrices: int,
+    spectral_max_dim: int,
+    polar_express_coeffs: tuple[tuple[float, float, float], ...],
+    orth_norm_factor: float,
 ) -> None:
     train_loader = data_generator(
-        args.train_files, training_stages[0].batch_size, training_stages[0].train_max_seq_len,
+        args.train_files, FIXED_BATCH_TOKENS, FIXED_SEQ_LEN,
         grad_accum_steps, True, args.bigram_vocab_size,
     )
     gc.collect()
 
     training_time_ms = 0.0
     training_manager.global_train_tokens = 0
-    next_eval_tokens = 0 if loop_config.eval_at_start else loop_config.eval_every_tokens
-    next_spectral_tokens = loop_config.spectral_every_tokens
+    next_eval_tokens = 0 if eval_at_start else eval_every_tokens
+    next_spectral_tokens = spectral_every_tokens
 
     wall_start_time = time.perf_counter()
     torch.cuda.synchronize()
     t0 = time.perf_counter()
 
-    train_steps = training_schedule.total_steps
     for step in range(train_steps + 1):
         last_step = step == train_steps
-        training_manager.advance_schedule(step)
 
         should_eval_by_tokens = (
-            loop_config.eval_every_tokens > 0
+            eval_every_tokens > 0
             and training_manager.global_train_tokens >= next_eval_tokens
         )
         should_eval_by_steps = args.val_loss_every > 0 and step % args.val_loss_every == 0
         if last_step or should_eval_by_tokens or should_eval_by_steps:
-            if last_step:
-                training_manager.apply_final_ws_ext()
             torch.cuda.synchronize()
             training_time_ms += 1000 * (time.perf_counter() - t0)
             run_validation(
@@ -252,17 +213,17 @@ def run_training_loop(
                 grad_accum_steps=grad_accum_steps, logger=logger, step=step, train_steps=train_steps,
                 training_time_ms=training_time_ms, wall_start_time=wall_start_time,
             )
-            if loop_config.eval_every_tokens > 0:
+            if eval_every_tokens > 0:
                 while next_eval_tokens <= training_manager.global_train_tokens:
-                    next_eval_tokens += loop_config.eval_every_tokens
+                    next_eval_tokens += eval_every_tokens
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
         if last_step:
             break
 
-        should_log = loop_config.log_every_steps > 0 and (
-            (step + 1) % loop_config.log_every_steps == 0 or step < 3
+        should_log = log_every_steps > 0 and (
+            (step + 1) % log_every_steps == 0 or step < 3
         )
         train_loss_accum = 0.0
         if should_log:
@@ -289,9 +250,7 @@ def run_training_loop(
             torch.cuda.synchronize()
 
         training_manager.step_optimizers(step)
-        stage_for_tokens, _ = training_schedule.lookup(step)
-        step_tokens = int(stage_for_tokens.batch_size)
-        training_manager.global_train_tokens += step_tokens
+        training_manager.global_train_tokens += FIXED_BATCH_TOKENS
 
         if should_log:
             torch.cuda.synchronize()
@@ -315,7 +274,7 @@ def run_training_loop(
                     "train/lr": float(_primary_train_lr_float(training_manager)),
                     "train/tokens": int(training_manager.global_train_tokens),
                     "train/step": int(step + 1),
-                    "train/throughput_tokens_per_sec": float(step_tokens / step_wall_s),
+                    "train/throughput_tokens_per_sec": float(FIXED_BATCH_TOKENS / step_wall_s),
                     "train/step_time_ms": float(step_wall_ms),
                     "train/grad_norm": float(grad_norm_value),
                     "train/total_time_s": float(train_time_s),
@@ -325,22 +284,22 @@ def run_training_loop(
             )
 
         if (
-            loop_config.spectral_every_tokens > 0
+            spectral_every_tokens > 0
             and training_manager.global_train_tokens >= next_spectral_tokens
         ):
             spectral_summary, spectral_details = collect_spectral_metrics(
                 training_manager.optimizer,
                 global_train_tokens=training_manager.global_train_tokens,
                 master_process=True,
-                spectral_max_matrices=loop_config.spectral_max_matrices,
-                spectral_max_dim=loop_config.spectral_max_dim,
-                coeffs=loop_config.polar_express_coeffs,
-                norm_factor=loop_config.orth_norm_factor,
+                spectral_max_matrices=spectral_max_matrices,
+                spectral_max_dim=spectral_max_dim,
+                coeffs=polar_express_coeffs,
+                norm_factor=orth_norm_factor,
             )
             if spectral_summary:
-                logger.log_spectral(spectral_summary, spectral_details, step_value=step + 1)
+                logger.log_spectral(spectral_summary)
             while next_spectral_tokens <= training_manager.global_train_tokens:
-                next_spectral_tokens += loop_config.spectral_every_tokens
+                next_spectral_tokens += spectral_every_tokens
 
     logger.log_metric(
         {

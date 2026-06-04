@@ -1,19 +1,37 @@
 import copy
+import math
 
 import torch
 
 from model import ForwardScheduleConfig
 from optim.core import NorMuonAndAdam
-from schedule import get_muon_momentum
+
+FIXED_BATCH_SIZE = 8 * 2048 * 8
+FIXED_SEQ_LEN = 2048
+FIXED_WINDOW_SIZES = (3, 7)
+FIXED_MTP_WEIGHTS = torch.tensor([1.0, 0.0])
+
+
+def _compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
+                warmup_frac: float = 0.10, min_lr_frac: float = 0.10) -> float:
+    if total_steps <= 1:
+        return lr_mul
+    warmup_steps = max(1, round(total_steps * warmup_frac))
+    if step < warmup_steps:
+        return lr_mul * ((step + 1) / warmup_steps)
+    progress = min(1.0, (step - warmup_steps) / max(1, total_steps - warmup_steps))
+    cosine = 0.5 * (1.0 + math.cos(progress * math.pi))
+    decay = min_lr_frac + (1.0 - min_lr_frac) * cosine
+    return lr_mul * decay
 
 
 class TrainingManager:
-    def __init__(self, model, *, device, args, training_schedule, lr_mul, orth_mode, polar_express, grad_accum_steps):
+    def __init__(self, model, *, device, args, total_steps, lr_mul, orth_mode, polar_express, grad_accum_steps):
         self.model = model
         self.device = device
         self.args = args
-        self.training_schedule = training_schedule
         self.orth_mode = orth_mode
+        self.total_steps = total_steps
         self.block_size = 128
         self.global_train_tokens = 0
         self.grad_accum_steps = grad_accum_steps
@@ -58,11 +76,7 @@ class TrainingManager:
             normuon_defaults=normuon_defaults,
             orthogonalize_fn=polar_express,
         )
-        self.split_step = training_schedule.split_step
         self.reset()
-
-    def apply_final_ws_ext(self):
-        self.ws_long = self.training_schedule.ws_post_yarn_ext
 
     def get_forward_args(self):
         return ForwardScheduleConfig(
@@ -72,28 +86,9 @@ class TrainingManager:
             train_max_seq_len=self.train_max_seq_len,
         )
 
-    def advance_schedule(self, step: int):
-        stage, _ = self.training_schedule.lookup(step)
-        self.ws_short, new_ws_long = stage.window_sizes
-        if new_ws_long != self.ws_long:
-            self.model.yarn.apply(self.ws_long * self.block_size, new_ws_long * self.block_size)
-            self.model.yarn_paired_head.apply(self.ws_long * self.block_size, new_ws_long * self.block_size)
-
-        new_batch_size = stage.batch_size
-        new_train_max_seq_len = stage.train_max_seq_len
-        if new_batch_size != self.batch_size or new_train_max_seq_len != self.train_max_seq_len:
-            self.train_loader_send_args = (new_batch_size, new_train_max_seq_len, self.grad_accum_steps)
-            self.batch_size = new_batch_size
-            self.train_max_seq_len = new_train_max_seq_len
-        else:
-            self.train_loader_send_args = None
-
-        self.ws_long = new_ws_long
-        self.mtp_weights = self.training_schedule.mtp_weights[step]
-
     def step_optimizers(self, step: int):
-        step_lr = self.training_schedule.get_lr(step)
-        muon_momentum = get_muon_momentum(step, self.training_schedule.total_steps)
+        step_lr = _compute_lr(step, self.total_steps)
+        muon_momentum = 0.95
         do_adam = self.orth_mode == "adamw" or step % 2 == 1
 
         for _, param_cfg in self.optimizer.param_cfgs.items():
@@ -102,18 +97,16 @@ class TrainingManager:
                 param_cfg.momentum = muon_momentum
 
         self.optimizer.step(do_adam=do_adam)
-        if self.split_step is not None and step == self.split_step:
-            self.optimizer.copy_lm_state_to_embed()
 
     def reset(self, state=None):
         if state is not None:
             self.optimizer.load_state_dict(state)
         self.optimizer.reset()
 
-        stage, _ = self.training_schedule.lookup(0)
-        self.ws_short, self.ws_long = stage.window_sizes
-        self.batch_size = stage.batch_size
-        self.train_max_seq_len = stage.train_max_seq_len
+        self.ws_short, self.ws_long = FIXED_WINDOW_SIZES
+        self.batch_size = FIXED_BATCH_SIZE
+        self.train_max_seq_len = FIXED_SEQ_LEN
+        self.mtp_weights = FIXED_MTP_WEIGHTS
         self.model.yarn.reset()
         self.model.yarn_paired_head.reset()
 

@@ -6,8 +6,6 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from schedule import TrainingSchedule, default_training_stages, Hyperparameters
-
 
 def relu_squared_mlp(x: Tensor, w1: Tensor, w2: Tensor) -> Tensor:
     x_flat = x.reshape(-1, x.shape[-1])
@@ -19,19 +17,6 @@ def softcapped_cross_entropy(x: Tensor, target_seq: Tensor, weight: Tensor) -> T
     logits = x @ weight
     logits = 23 * torch.sigmoid((logits + 5) / 7.5)
     return F.cross_entropy(logits.float(), target_seq, reduction="none")
-
-args = None
-device = None
-
-
-def setup_model_runtime(*, args_value, grad_accum_steps_value, device_value):
-    global args, device
-    args = args_value
-    device = device_value
-
-
-def norm(x: Tensor):
-    return F.rms_norm(x, (x.size(-1),))
 
 
 class CastedLinearT(nn.Module):
@@ -55,11 +40,12 @@ class CastedLinearT(nn.Module):
 # PyTorch nn.Module definitions for the model
 
 class Yarn(nn.Module):
-    def __init__(self, head_dim, max_seq_len, paired=False):
+    def __init__(self, head_dim, max_seq_len, device, paired=False):
         super().__init__()
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
         self.paired = paired
+        self.device = device
         self.reset()
 
     def rotary(self, x_BTHD):
@@ -72,11 +58,11 @@ class Yarn(nn.Module):
         return factor1 * x_BTHD + factor2 * x_flip
 
     def reset(self):
-        angular_freq = (1 / 1024) ** torch.linspace(0, 1, steps=self.head_dim//4, dtype=torch.float32, device=device)
+        angular_freq = (1 / 1024) ** torch.linspace(0, 1, steps=self.head_dim//4, dtype=torch.float32, device=self.device)
         angular_freq = angular_freq.repeat_interleave(2)
         # half-truncate RoPE by @YouJiacheng (w/ base freq tuning)
         angular_freq = torch.cat([angular_freq, angular_freq.new_zeros(self.head_dim//2)])
-        t = torch.arange(2*self.max_seq_len, dtype=torch.float32, device=device)
+        t = torch.arange(2*self.max_seq_len, dtype=torch.float32, device=self.device)
         if not self.paired:
             theta = torch.outer(t, angular_freq)
             self.factor1 = nn.Buffer(
@@ -196,7 +182,7 @@ class CausalSelfAttention(nn.Module):
         train_max_seq_len = attn_args.train_max_seq_len
 
         q, k, v = F.linear(x, sa_lambdas[0] * qkvo_w[:self.dim * 3].type_as(x)).view(B, T, 3 * self.num_heads, self.head_dim).chunk(3, dim=-2)
-        max_len = train_max_seq_len if self.training else args.val_batch_size
+        max_len = train_max_seq_len
 
         q, k = norm(q), norm(k) # QK norm @Grad62304977
 
@@ -258,7 +244,7 @@ class ForwardScheduleConfig:
     train_max_seq_len: int
 
 class GPT(nn.Module):
-    def __init__(self, vocab_size: int, num_layers: int, num_heads: int, head_dim: int, model_dim: int, max_seq_len: int):
+    def __init__(self, vocab_size: int, num_layers: int, num_heads: int, head_dim: int, model_dim: int, max_seq_len: int, device: torch.device):
         super().__init__()
         self.num_layers = num_layers
         self.vocab_size = next_multiple_of_n(vocab_size, n=128)
@@ -324,8 +310,8 @@ class GPT(nn.Module):
         self.paired_head_layers = [0, 2, 5, 9]
         self.attn = CausalSelfAttention(model_dim, head_dim, num_heads, paired=False)
         self.attn_paired = CausalSelfAttention(model_dim, head_dim, num_heads, paired=True)
-        self.yarn = Yarn(head_dim, max_seq_len)
-        self.yarn_paired_head = Yarn(head_dim, max_seq_len, paired=True)
+        self.yarn = Yarn(head_dim, max_seq_len, device)
+        self.yarn_paired_head = Yarn(head_dim, max_seq_len, device, paired=True)
         # there are only 50257 unique GPT-2 tokens; we extend to nearest multiple of 128 for efficiency.
         # suggested to me by @Grad62304977. this originates from Karpathy's experiments.
         self.lm_head = CastedLinearT(model_dim, self.vocab_size)
@@ -336,7 +322,7 @@ class GPT(nn.Module):
         with torch.no_grad():
             self.embed.weight.copy_(self.lm_head.weight.T)
 
-        self.bigram_embed = nn.Embedding(args.bigram_vocab_size, model_dim)
+        self.bigram_embed = nn.Embedding(50304 * 5, model_dim)
         nn.init.zeros_(self.bigram_embed.weight)
 
         self.post_lambdas = nn.Parameter(torch.ones(num_layers, 2))
