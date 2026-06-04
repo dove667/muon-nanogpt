@@ -30,7 +30,6 @@
 - `orth_mode != "adamw"` 时：Adam 参数奇数步更新，NorMuon 参数每步更新
 - `train.py` 使用脚本级相对导入（`import polar`），**不要**改为包导入
 - 无 checkpoint 保存（`Hyperparameters.save_checkpoint = False` 硬编码）
-- 首次运行编译模型约 7 分钟，后续复用 `.torchinductor/` 缓存
 - LM head 与 embedding 权重绑定（transpose 共享）
 - 训练为纯单卡，`NorMuonAndAdam` 中所有 comms 均为 `none`，无 sharding/all-reduce
 

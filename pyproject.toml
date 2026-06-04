@@ -7,7 +7,6 @@ dependencies = [
     "numpy>=1.24",
     "matplotlib>=3.7",
     "huggingface-hub>=0.20",
-    "wandb>=0.16",
 ]
 
 [tool.uv]

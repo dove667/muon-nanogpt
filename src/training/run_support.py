@@ -16,7 +16,7 @@ from data_pipeline import data_generator
 from metrics import collect_spectral_metrics, current_grad_norm
 
 
-def setup_device(*, base_seed: int) -> tuple[torch.device, int]:
+def setup_device(*, base_seed: int) -> torch.device:
     assert torch.cuda.is_available()
     device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
@@ -26,8 +26,7 @@ def setup_device(*, base_seed: int) -> tuple[torch.device, int]:
     torch.manual_seed(base_seed)
     torch.cuda.manual_seed_all(base_seed)
 
-    grad_accum_steps = int(os.environ.get("TRAIN_GRAD_ACCUM_STEPS", "16"))
-    return device, grad_accum_steps
+    return device
 
 
 def nvidia_smi_output() -> str:
@@ -52,28 +51,21 @@ class RunLogger:
         eval_every_tokens: int,
         grad_accum_steps: int,
         device: torch.device,
+        seed: int,
+        base_lr: float,
+        seq_len: int,
+        run_dir: Path,
+        run_name: str,
     ) -> None:
         self.args = args
         self.orth_mode = orth_mode
         self.orth_schedule_name = orth_schedule_name
-        self.wandb_run = None
+        self.run_dir = run_dir
+        self.run_name = run_name
         self.spectral_details_file = None
         self.spectral_details_enabled = os.environ.get("SPECTRAL_LOG_DETAILS", "0").lower() in {
             "1", "true", "yes", "on",
         }
-
-        self.run_name = os.environ.get("WANDB_NAME") or os.environ.get("RUN_NAME") or args.run_id
-        self.wandb_project = os.environ.get("WANDB_PROJECT", "muon-nanogpt")
-        self.wandb_entity = os.environ.get("WANDB_ENTITY") or None
-        self.wandb_mode = os.environ.get("WANDB_MODE") or None
-        self.wandb_enabled = os.environ.get("WANDB", "1").lower() not in {
-            "0", "false", "no", "disabled",
-        }
-
-        runs_root = Path(os.environ.get("RUNS_ROOT", "runs"))
-        self.run_dir = Path(os.environ.get("RUN_DIR", runs_root / self.run_name))
-        self.metrics_file = None
-        self.config_file = None
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.run_dir / "metrics.jsonl"
@@ -88,13 +80,12 @@ class RunLogger:
                 if not key.startswith("_") and not callable(getattr(args, key))
             },
             **orth_config,
-            "run_name": self.run_name,
-            "wandb_project": self.wandb_project,
-            "base_lr": float(os.environ.get("BASE_LR", "0.023")),
-            "actual_lr": float(os.environ.get("BASE_LR", "0.023")) * lr_mul,
-            "seed": int(os.environ.get("SEED", "0")),
+            "run_name": run_name,
+            "base_lr": base_lr,
+            "actual_lr": base_lr * lr_mul,
+            "seed": seed,
             "model_size": "train_gpt_11L_768D",
-            "seq_len": int(os.environ.get("TRAIN_SEQ_LEN", "2048")),
+            "seq_len": seq_len,
             "grad_accum": grad_accum_steps,
             "train_token_budget": train_token_budget,
             "eval_every_tokens": eval_every_tokens,
@@ -106,23 +97,6 @@ class RunLogger:
         }
         self.config_file.write_text(json.dumps(run_config, indent=2, sort_keys=True), encoding="utf-8")
 
-        if self.wandb_enabled:
-            try:
-                import wandb
-                wandb_kwargs = dict(
-                    project=self.wandb_project,
-                    name=self.run_name,
-                    config=run_config,
-                )
-                if self.wandb_entity:
-                    wandb_kwargs["entity"] = self.wandb_entity
-                if self.wandb_mode:
-                    wandb_kwargs["mode"] = self.wandb_mode
-                self.wandb_run = wandb.init(**wandb_kwargs)
-            except Exception as exc:
-                print(f"W&B init failed, continuing with local logs only: {exc}", flush=True)
-                self.wandb_run = None
-
     def _with_common_fields(self, record: dict, step_value: int | None = None) -> dict:
         payload = dict(record)
         payload.setdefault("run/name", self.run_name)
@@ -132,15 +106,10 @@ class RunLogger:
             payload.setdefault("train/step", int(step_value))
         return payload
 
-    def print0(self, message: str) -> None:
-        print(message)
-
     def log_metric(self, record: dict, step_value: int | None = None) -> None:
         payload = self._with_common_fields(record, step_value=step_value)
         with self.metrics_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
-        if self.wandb_run is not None:
-            self.wandb_run.log(payload, step=step_value)
 
     def log_spectral(self, summary_record: dict, detail_records: list[dict], step_value: int | None = None) -> None:
         if summary_record:
@@ -151,10 +120,6 @@ class RunLogger:
             for record in detail_records:
                 payload = self._with_common_fields(record, step_value=step_value)
                 handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-    def close(self) -> None:
-        if self.wandb_run is not None:
-            self.wandb_run.finish()
 
 
 @dataclass(slots=True)
@@ -171,14 +136,16 @@ class LoopConfig:
     orth_norm_factor: float
 
     @classmethod
-    def from_env(cls, *, orth_mode: str, orth_schedule_name: str, polar_express_coeffs, orth_norm_factor: float):
+    def from_args(cls, *, orth_mode: str, orth_schedule_name: str, polar_express_coeffs, orth_norm_factor: float,
+                  log_every_steps: int, eval_every_tokens: int, eval_at_start: bool,
+                  spectral_every_tokens: int, spectral_max_matrices: int, spectral_max_dim: int):
         return cls(
-            log_every_steps=int(os.environ.get("LOG_EVERY_STEPS", "20")),
-            eval_every_tokens=int(float(os.environ.get("EVAL_EVERY_TOKENS", "0"))),
-            eval_at_start=os.environ.get("EVAL_AT_START", "0").lower() in {"1", "true", "yes"},
-            spectral_every_tokens=int(float(os.environ.get("SPECTRAL_EVERY_TOKENS", "10000000"))),
-            spectral_max_matrices=int(os.environ.get("SPECTRAL_MAX_MATRICES", "5")),
-            spectral_max_dim=int(os.environ.get("SPECTRAL_MAX_DIM", "1024")),
+            log_every_steps=log_every_steps,
+            eval_every_tokens=eval_every_tokens,
+            eval_at_start=eval_at_start,
+            spectral_every_tokens=spectral_every_tokens,
+            spectral_max_matrices=spectral_max_matrices,
+            spectral_max_dim=spectral_max_dim,
             orth_mode=orth_mode,
             orth_schedule_name=orth_schedule_name,
             polar_express_coeffs=tuple(tuple(coeff) for coeff in polar_express_coeffs),
@@ -216,7 +183,7 @@ def run_validation(
     val_loss /= val_steps
     del val_loader
     eval_time_s = time.perf_counter() - eval_start_time
-    logger.print0(
+    print(
         f"step:{step}/{train_steps} val_loss:{val_loss:.4f} "
         f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/max(step, 1):.2f}ms",
     )
@@ -335,7 +302,7 @@ def run_training_loop(
             step_wall_s = float("nan")
 
         approx_training_time_ms = training_time_ms + 1000 * (time.perf_counter() - t0)
-        logger.print0(
+        print(
             f"step:{step + 1}/{train_steps} train_time:{approx_training_time_ms:.0f}ms "
             f"step_avg:{approx_training_time_ms / (step + 1):.2f}ms",
         )
@@ -385,7 +352,7 @@ def run_training_loop(
         },
         step_value=train_steps,
     )
-    logger.print0(
+    print(
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB",
     )

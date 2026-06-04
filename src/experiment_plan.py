@@ -53,14 +53,8 @@ class RunSpec:
         return args
 
 
-def run_completed(name: str, runs_root: str | None = None) -> bool:
-    if runs_root is None:
-        root = RUNS_ROOT
-    else:
-        root = Path(runs_root).expanduser()
-        if not root.is_absolute():
-            root = ROOT / root
-    metrics_path = root / name / "metrics.jsonl"
+def run_completed(name: str) -> bool:
+    metrics_path = RUNS_ROOT / name / "metrics.jsonl"
     if not metrics_path.exists() or metrics_path.stat().st_size == 0:
         return False
     last_line = metrics_path.read_text(encoding="utf-8").splitlines()[-1]
@@ -105,17 +99,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-every-steps", type=int, default=20,
                         help="Log training metrics every N steps")
 
-    parser.add_argument("--wandb", choices=["on", "off"], default="on",
-                        help="Enable or disable Weights & Biases logging")
-    parser.add_argument("--wandb-project", default="muon-nanogpt",
-                        help="Weights & Biases project name")
-    parser.add_argument("--wandb-entity",
-                        help="Weights & Biases entity name")
-    parser.add_argument("--wandb-mode",
-                        help="Weights & Biases mode (e.g. offline, dryrun)")
-
-    parser.add_argument("--runs-root",
-                        help="Root directory for run outputs")
     parser.add_argument("--data-path",
                         help="Path to training data directory")
     parser.add_argument("--model-max-seq-len", type=int, default=0,
@@ -131,7 +114,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def launch(spec: RunSpec, args: argparse.Namespace) -> None:
-    if args.skip_completed_runs and run_completed(spec.name, args.runs_root):
+    if args.skip_completed_runs and run_completed(spec.name):
         print("=" * 80)
         print(f"skip completed: {spec.name}")
         print("=" * 80)
@@ -141,8 +124,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
     command.extend([
         "--train-grad-accum-steps", str(args.train_grad_accum_steps),
         "--log-every-steps", str(args.log_every_steps),
-        "--wandb", args.wandb,
-        "--wandb-project", args.wandb_project,
         "--spectral-every-tokens", str(args.spectral_every_tokens),
         "--spectral-max-matrices", str(args.spectral_max_matrices),
         "--spectral-max-dim", str(args.spectral_max_dim),
@@ -151,12 +132,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
         command.extend(["--eval-batch-size", str(args.eval_batch_size)])
     if args.eval_at_start:
         command.append("--eval-at-start")
-    if args.wandb_entity:
-        command.extend(["--wandb-entity", args.wandb_entity])
-    if args.wandb_mode:
-        command.extend(["--wandb-mode", args.wandb_mode])
-    if args.runs_root:
-        command.extend(["--runs-root", args.runs_root])
     if args.data_path:
         command.extend(["--data-path", args.data_path])
     if args.model_max_seq_len > 0:

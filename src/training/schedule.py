@@ -56,7 +56,7 @@ class Hyperparameters:
     val_batch_size: int = int(float(os.environ.get("EVAL_BATCH_SIZE", 2048)))
     num_scheduled_iterations: int = int(float(os.environ.get("TRAIN_STEPS", 1440)))
     num_extension_iterations: int = int(float(os.environ.get("EXTENSION_STEPS", 0)))
-    run_id: str = os.environ.get("WANDB_NAME") or os.environ.get("RUN_NAME") or f"{uuid.uuid4()}"
+    run_id: str = os.environ.get("RUN_NAME") or f"{uuid.uuid4()}"
     val_loss_every: int = int(os.environ.get("VAL_LOSS_EVERY_STEPS", "0"))
     save_checkpoint: bool = False
     bigram_vocab_size: int = 50304 * 5

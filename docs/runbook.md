@@ -195,6 +195,5 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 ## 注意
 
 - `train.py` 现在既是单次训练入口，也是多卡 launcher；它仍然依赖脚本级相对导入（如 `import polar`），**不要改为包导入**。
-- 首次运行会编译模型和预热 CUDA 内核（约 7 分钟），后续运行复用 `.torchinductor/` 缓存。
 - `5090_results/` 是之前硬件的存档输出，**请勿修改**。
 - 固定实验栈默认使用 `seq_len=2048`、`batch=8*2048*8`、`grad_accum=16`、`window=(3,7)` 与 warmup+cosine LR。

@@ -202,12 +202,11 @@ def plot_group_bars(runs: list[dict], out_dir: Path, metric_key: str, filename: 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--out-dir", default="results/figures")
     parser.add_argument("--orths", nargs="*", default=None)
     args = parser.parse_args()
 
-    runs_dir = (ROOT / args.runs_dir).resolve()
+    runs_dir = (ROOT / "runs").resolve()
     out_dir = (ROOT / args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     orths = set(args.orths) if args.orths else None

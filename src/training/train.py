@@ -9,7 +9,7 @@ from torch import nn
 
 from model import GPT, setup_model_runtime
 from optim import TrainingManager
-from orthogonalization import build_orthogonalizer_config_from_env
+from orthogonalization import build_orthogonalizer_config
 from polar import make_polar_express
 from run_support import (
     LoopConfig,
@@ -23,10 +23,6 @@ from schedule import Hyperparameters, TrainingSchedule, default_training_stages
 ROOT = Path(__file__).resolve().parents[2]
 FIXED_BATCH_TOKENS = 8 * 2048 * 8
 FIXED_SEQ_LEN = 2048
-
-
-def compute_train_steps(train_token_budget: int) -> int:
-    return math.ceil(train_token_budget / FIXED_BATCH_TOKENS)
 
 
 def default_run_name(args: argparse.Namespace) -> str:
@@ -67,16 +63,6 @@ def parse_args() -> argparse.Namespace:
                         help="Run evaluation at the start of training")
     parser.add_argument("--log-every-steps", type=int, default=20,
                         help="Log training metrics every N steps")
-    parser.add_argument("--wandb", choices=["on", "off"], default="on",
-                        help="Enable or disable Weights & Biases logging")
-    parser.add_argument("--wandb-project", default="muon-nanogpt",
-                        help="Weights & Biases project name")
-    parser.add_argument("--wandb-entity", default=None,
-                        help="Weights & Biases entity name")
-    parser.add_argument("--wandb-mode", default=None,
-                        help="Weights & Biases mode (e.g. offline, dryrun)")
-    parser.add_argument("--runs-root", default=None,
-                        help="Root directory for run outputs")
     parser.add_argument("--data-path", default=None,
                         help="Path to training data directory")
     parser.add_argument("--fast-steps", type=int, default=None,
@@ -143,59 +129,16 @@ def build_model(
     return model
 
 
-def run_worker(args: argparse.Namespace) -> None:
-    runs_root = Path(args.runs_root).expanduser() if args.runs_root else ROOT / "runs"
-    if not runs_root.is_absolute():
-        runs_root = ROOT / runs_root
-    run_dir = (runs_root / args.name).resolve()
+def main(args: argparse.Namespace) -> None:
+    run_dir = (ROOT / "runs" / args.name).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    os.environ["ORTH"] = args.orth
-    os.environ["LR_MUL"] = str(args.lr_mul)
-    os.environ["BASE_LR"] = "0.008" if args.orth == "adamw" else "0.023"
-    os.environ["SEED"] = str(args.seed)
-    os.environ["TRAIN_TOKEN_BUDGET"] = str(args.train_token_budget)
-    os.environ["TRAIN_STEPS"] = str(compute_train_steps(args.train_token_budget))
-    os.environ["TRAIN_GRAD_ACCUM_STEPS"] = str(args.train_grad_accum_steps)
-    os.environ["TRAIN_SEQ_LEN"] = str(FIXED_SEQ_LEN)
-    os.environ["EVAL_EVERY_TOKENS"] = str(args.eval_every_tokens)
-    os.environ["EVAL_TOKENS"] = str(args.eval_tokens)
-    os.environ["EVAL_BATCH_SIZE"] = str(args.eval_batch_size)
-    os.environ["EVAL_AT_START"] = "1" if args.eval_at_start else "0"
-    os.environ["LOG_EVERY_STEPS"] = str(args.log_every_steps)
-    os.environ["EXTENSION_STEPS"] = "0"
-    os.environ["VAL_LOSS_EVERY_STEPS"] = "0"
-    os.environ["WANDB"] = "1" if args.wandb == "on" else "0"
-    os.environ["WANDB_PROJECT"] = args.wandb_project
-    os.environ["WANDB_NAME"] = args.name
-    os.environ.pop("WANDB_GROUP", None)
-    os.environ["RUNS_ROOT"] = str(runs_root)
-    os.environ["RUN_DIR"] = str(run_dir)
-    os.environ["PYTHONUNBUFFERED"] = "1"
-    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(ROOT / ".torchinductor"))
-    if args.wandb_entity:
-        os.environ["WANDB_ENTITY"] = args.wandb_entity
-    if args.wandb_mode:
-        os.environ["WANDB_MODE"] = args.wandb_mode
-    elif args.wandb == "on" and not os.environ.get("WANDB_API_KEY") and not Path.home().joinpath(".netrc").exists():
-        os.environ["WANDB_MODE"] = "offline"
     if args.data_path:
         os.environ["DATA_PATH"] = args.data_path
-    if args.orth == "manual":
-        os.environ["FAST_STEPS"] = str(args.fast_steps)
-        os.environ["STABLE_STEPS"] = str(args.stable_steps)
-    elif args.orth == "polar_express":
-        os.environ["PE_LOWER_BOUND"] = str(args.pe_lower_bound)
-        os.environ["PE_CUSHION"] = str(args.pe_cushion)
-        os.environ["PE_SAFETY_FACTOR"] = str(args.pe_safety_factor)
-    if args.model_max_seq_len > 0:
-        os.environ["MODEL_MAX_SEQ_LEN"] = str(args.model_max_seq_len)
-    os.environ["SPECTRAL_EVERY_TOKENS"] = str(args.spectral_every_tokens)
-    os.environ["SPECTRAL_MAX_MATRICES"] = str(args.spectral_max_matrices)
-    os.environ["SPECTRAL_MAX_DIM"] = str(args.spectral_max_dim)
+    os.environ["PYTHONUNBUFFERED"] = "1"
 
     grad_accum_steps = args.train_grad_accum_steps
-    train_steps = compute_train_steps(args.train_token_budget)
+    train_steps = math.ceil(args.train_token_budget / FIXED_BATCH_TOKENS)
 
     print("=" * 80)
     print(f"run: {args.name}")
@@ -205,89 +148,103 @@ def run_worker(args: argparse.Namespace) -> None:
     print(f"grad_accum: {grad_accum_steps}")
     print(f"eval_every_tokens: {args.eval_every_tokens}")
     print(f"eval_tokens: {args.eval_tokens}")
-    print(f"device: cuda:0")
     print("=" * 80)
 
-    device, _ = setup_device(base_seed=args.seed)
-    logger = None
+    device = setup_device(base_seed=args.seed)
 
-    try:
-        orth_state = build_orthogonalizer_config_from_env()
-        polar_express = make_polar_express(
-            coeff_schedule=orth_state.coeff_schedule,
-            norm_factor=orth_state.norm_factor,
-        )
+    orth_state = build_orthogonalizer_config(
+        orth_mode=args.orth,
+        fast_steps=args.fast_steps or 5,
+        stable_steps=args.stable_steps or (max(5 - (args.fast_steps or 5), 0)),
+        pe_lower_bound_raw=args.pe_lower_bound,
+        pe_cushion=args.pe_cushion,
+        pe_safety_factor=args.pe_safety_factor,
+        lr_mul=args.lr_mul,
+    )
+    polar_express = make_polar_express(
+        coeff_schedule=orth_state.coeff_schedule,
+        norm_factor=orth_state.norm_factor,
+    )
 
-        hparams = Hyperparameters()
-        hparams.val_batch_size = args.eval_batch_size
+    hparams = Hyperparameters()
+    hparams.val_batch_size = args.eval_batch_size
+    hparams.num_scheduled_iterations = train_steps
 
-        training_stages = default_training_stages()
-        training_schedule = TrainingSchedule(
-            training_stages,
-            hparams.num_scheduled_iterations,
-            hparams.num_extension_iterations,
-            device=device,
-        )
+    training_stages = default_training_stages()
+    training_schedule = TrainingSchedule(
+        training_stages,
+        hparams.num_scheduled_iterations,
+        hparams.num_extension_iterations,
+        device=device,
+    )
 
-        setup_model_runtime(
-            args_value=hparams,
-            grad_accum_steps_value=grad_accum_steps,
-            device_value=device,
-        )
+    setup_model_runtime(
+        args_value=hparams,
+        grad_accum_steps_value=grad_accum_steps,
+        device_value=device,
+    )
 
-        logger = RunLogger(
-            args=hparams,
-            orth_config=orth_state.to_record(),
-            orth_mode=orth_state.orth_mode,
-            orth_schedule_name=orth_state.schedule_name,
-            lr_mul=orth_state.lr_mul,
-            train_token_budget=args.train_token_budget,
-            eval_every_tokens=args.eval_every_tokens,
-            grad_accum_steps=grad_accum_steps,
-            device=device,
-        )
+    base_lr = 0.008 if args.orth == "adamw" else 0.023
+    logger = RunLogger(
+        args=hparams,
+        orth_config=orth_state.to_record(),
+        orth_mode=orth_state.orth_mode,
+        orth_schedule_name=orth_state.schedule_name,
+        lr_mul=orth_state.lr_mul,
+        train_token_budget=args.train_token_budget,
+        eval_every_tokens=args.eval_every_tokens,
+        grad_accum_steps=grad_accum_steps,
+        device=device,
+        seed=args.seed,
+        base_lr=base_lr,
+        seq_len=FIXED_SEQ_LEN,
+        run_dir=run_dir,
+        run_name=args.name,
+    )
 
-        logger.print0("=" * 100)
-        logger.print0(f"Running Python {sys.version}")
-        logger.print0(
-            f"Running PyTorch {torch.__version__} compiled for CUDA {torch.version.cuda}"
-        )
-        logger.print0(nvidia_smi_output())
-        logger.print0("=" * 100)
+    print("=" * 100)
+    print(f"Running Python {sys.version}")
+    print(
+        f"Running PyTorch {torch.__version__} compiled for CUDA {torch.version.cuda}"
+    )
+    print("=" * 100)
 
-        model = build_model(hparams, training_stages, device)
+    model = build_model(hparams, training_stages, device)
 
-        training_manager = TrainingManager(
-            model,
-            device=device,
-            args=hparams,
-            training_schedule=training_schedule,
-            lr_mul=orth_state.lr_mul,
-            orth_mode=orth_state.orth_mode,
-            polar_express=polar_express,
-            grad_accum_steps=grad_accum_steps,
-        )
-        loop_config = LoopConfig.from_env(
-            orth_mode=orth_state.orth_mode,
-            orth_schedule_name=orth_state.schedule_name,
-            polar_express_coeffs=orth_state.coeff_schedule,
-            orth_norm_factor=orth_state.norm_factor,
-        )
+    training_manager = TrainingManager(
+        model,
+        device=device,
+        args=hparams,
+        training_schedule=training_schedule,
+        lr_mul=orth_state.lr_mul,
+        orth_mode=orth_state.orth_mode,
+        polar_express=polar_express,
+        grad_accum_steps=grad_accum_steps,
+    )
+    loop_config = LoopConfig.from_args(
+        orth_mode=orth_state.orth_mode,
+        orth_schedule_name=orth_state.schedule_name,
+        polar_express_coeffs=orth_state.coeff_schedule,
+        orth_norm_factor=orth_state.norm_factor,
+        log_every_steps=args.log_every_steps,
+        eval_every_tokens=args.eval_every_tokens,
+        eval_at_start=args.eval_at_start,
+        spectral_every_tokens=args.spectral_every_tokens,
+        spectral_max_matrices=args.spectral_max_matrices,
+        spectral_max_dim=args.spectral_max_dim,
+    )
 
-        run_training_loop(
-            model=model,
-            training_manager=training_manager,
-            args=hparams,
-            training_stages=training_stages,
-            training_schedule=training_schedule,
-            grad_accum_steps=grad_accum_steps,
-            logger=logger,
-            loop_config=loop_config,
-        )
-    finally:
-        if logger is not None:
-            logger.close()
+    run_training_loop(
+        model=model,
+        training_manager=training_manager,
+        args=hparams,
+        training_stages=training_stages,
+        training_schedule=training_schedule,
+        grad_accum_steps=grad_accum_steps,
+        logger=logger,
+        loop_config=loop_config,
+    )
 
 
 if __name__ == "__main__":
-    run_worker(parse_args())
+    main(parse_args())

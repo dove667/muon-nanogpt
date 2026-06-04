@@ -182,13 +182,12 @@ def print_top(rows: list[dict], count: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--out-dir", default="results")
     parser.add_argument("--print-top", type=int, default=0)
     parser.add_argument("--allow-empty", action="store_true")
     args = parser.parse_args()
 
-    runs_dir = (ROOT / args.runs_dir).resolve()
+    runs_dir = (ROOT / "runs").resolve()
     out_dir = (ROOT / args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 

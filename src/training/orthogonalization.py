@@ -114,14 +114,15 @@ def polar_express_coefficients(lower_bound: float, num_iters: int, safety_factor
     return coeffs
 
 
-def build_orthogonalizer_config_from_env() -> OrthogonalizerConfig:
-    orth_mode = os.environ.get("ORTH", "fast").strip().lower()
-    fast_steps = int(os.environ.get("FAST_STEPS", "5"))
-    stable_steps = int(os.environ.get("STABLE_STEPS", str(max(5 - fast_steps, 0))))
-    pe_lower_bound_raw = os.environ.get("PE_LOWER_BOUND", "1e-3").strip().lower()
-    pe_cushion = float(os.environ.get("PE_CUSHION", "2e-2"))
-    pe_safety_factor = float(os.environ.get("PE_SAFETY_FACTOR", "2e-2"))
-    lr_mul = float(os.environ.get("LR_MUL", "1.0"))
+def build_orthogonalizer_config(
+    orth_mode: str,
+    fast_steps: int,
+    stable_steps: int,
+    pe_lower_bound_raw: str,
+    pe_cushion: float,
+    pe_safety_factor: float,
+    lr_mul: float,
+) -> OrthogonalizerConfig:
 
     if orth_mode == "adamw":
         coeffs, eps, schedule = [], 0.0, "adamw"
