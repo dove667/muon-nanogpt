@@ -56,7 +56,7 @@ python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
 ## 生成分析报告
 
 ```bash
-# 汇总为 CSV
+# 汇总为 run-level / config-level CSV
 python -m src.analysis.summarize_runs --runs-dir runs --out-dir results --print-top 12
 
 # 生成曲线图
@@ -108,7 +108,12 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 | `metrics.jsonl` | 每步一条 JSON（训练指标、验证指标、谱指标） |
 | `console.log` | torchrun 标准输出 |
 
-分析脚本读取 `runs/` 并输出到 `results/`。
+分析脚本读取 `runs/` 并输出到 `results/`：
+
+- `results/run_summary.csv`：逐 run 汇总
+- `results/group_summary.csv`：按 5 个配置聚合后的 mean/std
+- `results/figures/`：fixed 实验的对比图
+- `results/dashboard.html`：轻量 HTML 报告
 
 ## 注意
 

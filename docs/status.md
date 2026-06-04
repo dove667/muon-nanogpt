@@ -29,6 +29,10 @@
   - 删除 `src/plan/` 多阶段计划层
   - `RunSpec` 与 15-run fixed plan 直接收敛到 `src/experiment_plan.py`
   - `docs/runbook.md` 改为单一实验入口说明
+- 分析层已适配 fixed 实验：
+  - `summarize_runs.py` 输出 `run_summary.csv` 与 `group_summary.csv`
+  - `plot_curves.py` 改为 5 配置 mean/std 曲线、seed 曲线和成本/质量对比图
+  - `build_dashboard.py` 改为面向 fixed 15 runs 的轻量 HTML 报告
 
 ## 为什么这样改
 
@@ -41,4 +45,3 @@
 - 当前固定栈保留了现有第二阶段的窗口配置 `(3, 7)`，MTP 权重固定为 `[1.0, 0.0]`
 - YaRN 逻辑未删除，只是不再随阶段切换
 - 若后续需要复现实验，可直接从 `python -m src.experiment_plan` 启动
-- `src/analysis/` 仍保留部分面向旧多阶段结果的脚本；当前先只化简训练/实验入口
