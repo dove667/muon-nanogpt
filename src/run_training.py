@@ -1,4 +1,3 @@
-
 import argparse
 import math
 import os
@@ -7,17 +6,12 @@ from pathlib import Path
 
 from src.utils import ROOT, TRAINING_ROOT as DEFAULT_TRAINING_ROOT, RUNS_ROOT as DEFAULT_RUNS_ROOT
 
-FIXED_BATCH_TOKENS = 16 * 2048 * 8
+FIXED_BATCH_TOKENS = 8 * 2048 * 8
 FIXED_SEQ_LEN = 2048
 
 
 def compute_train_steps(train_token_budget: int) -> int:
     return math.ceil(train_token_budget / FIXED_BATCH_TOKENS)
-
-
-def default_group(orth: str) -> str:
-    del orth
-    return "fixed_t5"
 
 
 def default_run_name(args: argparse.Namespace) -> str:
@@ -39,12 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"], default=os.environ.get("ORTH", "fast"))
     parser.add_argument("--lr-mul", type=float, default=float(os.environ.get("LR_MUL", "1.0")))
     parser.add_argument("--seed", type=int, default=int(os.environ.get("SEED", "0")))
-    parser.add_argument("--group", default=os.environ.get("WANDB_GROUP"))
     parser.add_argument("--name", default=os.environ.get("WANDB_NAME") or os.environ.get("RUN_NAME"))
-    parser.add_argument("--train-token-budget", type=int, default=int(float(os.environ.get("TRAIN_TOKEN_BUDGET", "30000000"))))
-    parser.add_argument("--eval-every-tokens", type=int, default=int(float(os.environ.get("EVAL_EVERY_TOKENS", "5000000"))))
-    parser.add_argument("--eval-tokens", type=int, default=int(float(os.environ.get("EVAL_TOKENS", "1048576"))))
-    parser.add_argument("--train-grad-accum-steps", type=int, default=int(os.environ.get("TRAIN_GRAD_ACCUM_STEPS", os.environ.get("SPEEDTEST_GRAD_ACCUM_STEPS", "32"))))
+    parser.add_argument("--train-token-budget", type=int, default=int(float(os.environ.get("TRAIN_TOKEN_BUDGET", "100000000"))))
+    parser.add_argument("--eval-every-tokens", type=int, default=int(float(os.environ.get("EVAL_EVERY_TOKENS", "2000000"))))
+    parser.add_argument("--eval-tokens", type=int, default=int(float(os.environ.get("EVAL_TOKENS", "524288"))))
+    parser.add_argument("--train-grad-accum-steps", type=int, default=int(os.environ.get("TRAIN_GRAD_ACCUM_STEPS", os.environ.get("SPEEDTEST_GRAD_ACCUM_STEPS", "16"))))
     parser.add_argument("--eval-batch-size", type=int, default=None)
     parser.add_argument("--eval-at-start", action="store_true", default=os.environ.get("EVAL_AT_START", "0").lower() in {"1", "true", "yes"})
     parser.add_argument("--log-every-steps", type=int, default=int(os.environ.get("LOG_EVERY_STEPS", "20")))
@@ -77,8 +70,6 @@ def parse_args() -> argparse.Namespace:
         args.fast_steps = args.ns_t if args.orth == "manual" else args.fast_steps
     if args.stable_steps is None:
         args.stable_steps = max(args.ns_t - args.fast_steps, 0) if args.orth == "manual" else args.stable_steps
-    if args.group is None:
-        args.group = default_group(args.orth)
     if args.name is None:
         args.name = default_run_name(args)
     if args.eval_batch_size is None:
@@ -90,7 +81,7 @@ def prepare_env(args: argparse.Namespace) -> tuple[dict[str, str], Path, Path]:
     env = os.environ.copy()
     training_root = Path(args.training_root).resolve()
     trainer_py = Path(args.trainer_py).resolve() if args.trainer_py else (training_root / "train.py").resolve()
-    run_dir = Path(args.runs_root).resolve() / args.group / args.name
+    run_dir = Path(args.runs_root).resolve() / args.name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     env["ORTH"] = args.orth
@@ -110,8 +101,8 @@ def prepare_env(args: argparse.Namespace) -> tuple[dict[str, str], Path, Path]:
     env["VAL_LOSS_EVERY_STEPS"] = str(args.val_loss_every_steps)
     env["WANDB"] = "1" if args.wandb == "on" else "0"
     env["WANDB_PROJECT"] = args.wandb_project
-    env["WANDB_GROUP"] = args.group
     env["WANDB_NAME"] = args.name
+    env.pop("WANDB_GROUP", None)
     env["RUNS_ROOT"] = str(Path(args.runs_root).resolve())
     env["RUN_DIR"] = str(run_dir)
     env["PYTHONUNBUFFERED"] = "1"
@@ -154,7 +145,7 @@ def run() -> int:
     args = parse_args()
     env, training_root, trainer_py = prepare_env(args)
     print("=" * 80)
-    print(f"run: {args.group}/{args.name}")
+    print(f"run: {args.name}")
     print(f"orth: {args.orth}")
     print(f"train_token_budget: {args.train_token_budget}")
     print(f"train_steps: {env['TRAIN_STEPS']}")

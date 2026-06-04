@@ -109,7 +109,6 @@ class RunLogger:
         }
 
         self.run_name = os.environ.get("WANDB_NAME") or os.environ.get("RUN_NAME") or args.run_id
-        self.wandb_group = os.environ.get("WANDB_GROUP", "uncategorized")
         self.wandb_project = os.environ.get("WANDB_PROJECT", "muon-nanogpt")
         self.wandb_entity = os.environ.get("WANDB_ENTITY") or None
         self.wandb_mode = os.environ.get("WANDB_MODE") or None
@@ -118,7 +117,7 @@ class RunLogger:
         }
 
         runs_root = Path(os.environ.get("RUNS_ROOT", "runs"))
-        self.run_dir = Path(os.environ.get("RUN_DIR", runs_root / self.wandb_group / self.run_name))
+        self.run_dir = Path(os.environ.get("RUN_DIR", runs_root / self.run_name))
         self.metrics_file = None
         self.config_file = None
 
@@ -139,7 +138,6 @@ class RunLogger:
             },
             **orth_config,
             "run_name": self.run_name,
-            "wandb_group": self.wandb_group,
             "wandb_project": self.wandb_project,
             "base_lr": float(os.environ.get("BASE_LR", "0.023")),
             "actual_lr": float(os.environ.get("BASE_LR", "0.023")) * lr_mul,
@@ -163,7 +161,6 @@ class RunLogger:
                 import wandb
                 wandb_kwargs = dict(
                     project=self.wandb_project,
-                    group=self.wandb_group,
                     name=self.run_name,
                     config=run_config,
                 )
@@ -179,7 +176,6 @@ class RunLogger:
     def _with_common_fields(self, record: dict, step_value: int | None = None) -> dict:
         payload = dict(record)
         payload.setdefault("run/name", self.run_name)
-        payload.setdefault("run/group", self.wandb_group)
         payload.setdefault("orthogonalizer/type", self.orth_mode)
         payload.setdefault("orthogonalizer/schedule_name", self.orth_schedule_name)
         if step_value is not None:

@@ -26,14 +26,14 @@ ORTH_COLOR = {
 }
 
 
-def load_runs(runs_dir: Path, groups: set[str] | None) -> list[dict]:
+def load_runs(runs_dir: Path, orths: set[str] | None) -> list[dict]:
     runs = []
     for metrics_path in sorted(runs_dir.rglob("metrics.jsonl")):
         run_dir = metrics_path.parent
         config_path = run_dir / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-        group = config.get("wandb_group", run_dir.parent.name)
-        if groups and group not in groups:
+        orth = config.get("orthogonalizer_type")
+        if orths and orth not in orths:
             continue
         name = config.get("run_name", run_dir.name)
         seed = None
@@ -44,10 +44,9 @@ def load_runs(runs_dir: Path, groups: set[str] | None) -> list[dict]:
                 seed = None
         runs.append({
             "dir": run_dir,
-            "group": group,
             "name": name,
             "seed": seed,
-            "orth": config.get("orthogonalizer_type"),
+            "orth": orth,
             "schedule": config.get("orth_schedule_name", ""),
             "rows": read_jsonl(metrics_path),
         })
@@ -205,15 +204,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--out-dir", default="results/figures")
-    parser.add_argument("--groups", nargs="*", default=None)
+    parser.add_argument("--orths", nargs="*", default=None)
     args = parser.parse_args()
 
     runs_dir = (ROOT / args.runs_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    groups = set(args.groups) if args.groups else None
+    orths = set(args.orths) if args.orths else None
 
-    runs = load_runs(runs_dir, groups)
+    runs = load_runs(runs_dir, orths)
     if not runs:
         print("No run metrics found.")
         return 0

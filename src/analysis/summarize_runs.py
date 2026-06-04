@@ -76,7 +76,6 @@ def summarize_run(run_dir: Path) -> dict | None:
     name = config.get("run_name", run_dir.name)
     return {
         "run": str(run_dir.relative_to(ROOT)),
-        "group": config.get("wandb_group", run_dir.parent.name),
         "name": name,
         "seed": parse_seed(name),
         "orthogonalizer_type": orth,
@@ -200,16 +199,16 @@ def main() -> int:
         row["seed"] if row["seed"] is not None else 999,
         row["name"],
     ))
-    group_rows = summarize_groups(rows)
+    orth_rows = summarize_groups(rows)
 
     run_csv = out_dir / "run_summary.csv"
-    group_csv = out_dir / "group_summary.csv"
+    orth_csv = out_dir / "orth_summary.csv"
     if not rows and run_csv.exists() and not args.allow_empty:
         print(f"No run metrics found; preserved existing {run_csv}")
         return 0
 
     run_fields = [
-        "run", "group", "name", "seed", "orthogonalizer_type", "orth_label", "schedule", "lr_mul",
+        "run", "name", "seed", "orthogonalizer_type", "orth_label", "schedule", "lr_mul",
         "T_ns", "fast_steps", "stable_steps", "pe_T", "pe_lower_bound",
         "train_token_budget", "final_tokens", "final_val_loss", "best_val_loss",
         "val_auc_tokens", "val_auc_wall", "throughput_tokens_per_sec", "step_time_ms",
@@ -222,19 +221,19 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(rows)
 
-    group_fields = [
+    orth_fields = [
         "orthogonalizer_type", "orth_label", "run_count", "completed_count",
         "final_val_loss_mean", "final_val_loss_std", "best_val_loss_mean",
         "val_auc_tokens_mean", "throughput_tokens_per_sec_mean", "step_time_ms_mean",
         "spec_update_orth_error_mean", "wall_elapsed_s_mean",
     ]
-    with group_csv.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=group_fields)
+    with orth_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=orth_fields)
         writer.writeheader()
-        writer.writerows(group_rows)
+        writer.writerows(orth_rows)
 
     print(f"Wrote {run_csv}")
-    print(f"Wrote {group_csv}")
+    print(f"Wrote {orth_csv}")
     print_top(rows, args.print_top)
     return 0
 

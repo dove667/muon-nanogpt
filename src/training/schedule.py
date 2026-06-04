@@ -52,7 +52,7 @@ class Hyperparameters:
     data_path = os.environ.get("DATA_PATH", ".")
     train_files: str = _resolve_split_pattern("train")
     val_files: str = _resolve_split_pattern("val")
-    val_tokens: int = int(float(os.environ.get("EVAL_TOKENS", 10485760)))
+    val_tokens: int = int(float(os.environ.get("EVAL_TOKENS", 524288)))
     val_batch_size: int = int(float(os.environ.get("EVAL_BATCH_SIZE", 2048)))
     num_scheduled_iterations: int = int(float(os.environ.get("TRAIN_STEPS", 1440)))
     num_extension_iterations: int = int(float(os.environ.get("EXTENSION_STEPS", 0)))
@@ -131,7 +131,7 @@ def default_training_stages() -> list[TrainingStage]:
         TrainingStage(
             duration=1.0,
             train_max_seq_len=2048,
-            batch_size=16 * 2048 * 8,
+            batch_size=8 * 2048 * 8,
             window_sizes=(3, 7),
             lr_mul=1.0,
             mtp_weights_start=[1.0, 0.0],

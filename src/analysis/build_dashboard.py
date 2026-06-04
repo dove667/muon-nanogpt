@@ -35,17 +35,17 @@ def figure_tag(path: Path, out_path: Path, caption: str) -> str:
     )
 
 
-def summary_cards(group_rows: list[dict[str, str]], run_rows: list[dict[str, str]]) -> str:
-    best = next((row for row in group_rows if row.get("final_val_loss_mean")), None)
-    completed = sum(int(row.get("completed_count") or 0) for row in group_rows)
-    total = sum(int(row.get("run_count") or 0) for row in group_rows)
+def summary_cards(orth_rows: list[dict[str, str]], run_rows: list[dict[str, str]]) -> str:
+    best = next((row for row in orth_rows if row.get("final_val_loss_mean")), None)
+    completed = sum(int(row.get("completed_count") or 0) for row in orth_rows)
+    total = sum(int(row.get("run_count") or 0) for row in orth_rows)
     best_name = best.get("orth_label") if best else ""
     best_loss = best.get("final_val_loss_mean") if best else ""
     cards = [
         ("实验规模", f"{total} runs", "固定 5 配置 × 3 seeds"),
         ("完成情况", f"{completed}/{total}", "completed / total"),
         ("最佳平均 final loss", best_loss, best_name),
-        ("比较对象", f"{len(group_rows)} configs", "AdamW / Vanilla / Manual / Fast / Polar Express"),
+        ("比较对象", f"{len(orth_rows)} configs", "AdamW / Vanilla / Manual / Fast / Polar Express"),
     ]
     return "\n".join(
         "<section class=\"card\">"
@@ -57,7 +57,7 @@ def summary_cards(group_rows: list[dict[str, str]], run_rows: list[dict[str, str
     )
 
 
-def group_table(rows: list[dict[str, str]]) -> str:
+def orth_table(rows: list[dict[str, str]]) -> str:
     body = []
     for row in rows:
         body.append(
@@ -182,7 +182,7 @@ ul { color: var(--muted); }
 """
 
 
-def build_html(run_rows: list[dict[str, str]], group_rows: list[dict[str, str]], figures_dir: Path, out_path: Path) -> str:
+def build_html(run_rows: list[dict[str, str]], orth_rows: list[dict[str, str]], figures_dir: Path, out_path: Path) -> str:
     figure_specs = [
         ("val_loss_mean_vs_tokens.png", "5 个配置的 mean±std val/loss-token 曲线。"),
         ("val_loss_mean_vs_wall_time.png", "5 个配置的 mean±std val/loss-wall-time 曲线。"),
@@ -221,12 +221,12 @@ def build_html(run_rows: list[dict[str, str]], group_rows: list[dict[str, str]],
 
     <section class="panel">
       <h2>概览</h2>
-      <div class="cards">{summary_cards(group_rows, run_rows)}</div>
+      <div class="cards">{summary_cards(orth_rows, run_rows)}</div>
     </section>
 
     <section class="panel">
       <h2>配置聚合</h2>
-      <div class="table-wrap">{group_table(group_rows)}</div>
+      <div class="table-wrap">{orth_table(orth_rows)}</div>
     </section>
 
     <section class="panel">
@@ -255,8 +255,8 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     run_rows = read_csv(analysis_dir / "run_summary.csv")
-    group_rows = read_csv(analysis_dir / "group_summary.csv")
-    html_text = build_html(run_rows, group_rows, analysis_dir / "figures", out_path)
+    orth_rows = read_csv(analysis_dir / "orth_summary.csv")
+    html_text = build_html(run_rows, orth_rows, analysis_dir / "figures", out_path)
     out_path.write_text(html_text, encoding="utf-8")
     print(f"Wrote {out_path}")
     return 0
