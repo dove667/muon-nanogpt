@@ -53,9 +53,10 @@ def data_generator(filename_pattern: str, tokens_per_step: int, seq_len: int, gr
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
     while True:
-        buf = next_token_block(tokens_per_microbatch + sequences_per_microbatch)
-        inputs = buf[:-sequences_per_microbatch].view(sequences_per_microbatch, seq_len).to(dtype=torch.int64)
-        targets = buf[1:].view(sequences_per_microbatch, seq_len).to(dtype=torch.int64)
+        buf = next_token_block(sequences_per_microbatch * (seq_len + 1))
+        buf = buf.view(sequences_per_microbatch, seq_len + 1)
+        inputs = buf[:, :-1].to(dtype=torch.int64)
+        targets = buf[:, 1:].to(dtype=torch.int64)
         yield (
             inputs.pin_memory().to(device="cuda", non_blocking=True),
             targets.pin_memory().to(device="cuda", non_blocking=True),

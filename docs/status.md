@@ -22,6 +22,7 @@
 - 去除所有竞速 trick（参数银行、softcap logits、ReLU² MLP、QK norm 等）
 - 训练入口移除 CLI seed，固定 seed 写死在代码内，run 名改为时间戳
 - 数据读取改为按 shard 流式加载，避免一次性把全部数据 pin 到内存
+- 修复 data_generator 的 microbatch 取样长度错误，按 `(seq_len + 1)` 成对切分 inputs/targets
 - 修复 spectral 模式参数名错误、AdamW 模式学习率日志、final val loss 取值错误
 - benchmark 只记录端到端总时间，分析图同步改为总 wall-clock 柱状图
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
