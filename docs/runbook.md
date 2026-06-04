@@ -25,7 +25,7 @@ python -m src.run_training \
 
 ```bash
 # Manual：5 步中前 3 步快速、后 2 步稳定
-python -m src.run_training --orth manual --ns-t 5 --fast-steps 3 --stable-steps 2 ...
+python -m src.run_training --orth manual --fast-steps 3 --stable-steps 2 ...
 
 # Fast：5 步全 fast 系数
 python -m src.run_training --orth fast ...
@@ -33,8 +33,8 @@ python -m src.run_training --orth fast ...
 # AdamW baseline：矩阵参数不做 Muon 正交化
 python -m src.run_training --orth adamw ...
 
-# Polar Express：T=5，奇异值下界 1e-3
-python -m src.run_training --orth polar_express --pe-t 5 --pe-lower-bound 1e-3 ...
+# Polar Express：奇异值下界 1e-3
+python -m src.run_training --orth polar_express --pe-lower-bound 1e-3 ...
 ```
 
 ### 参数
@@ -56,15 +56,13 @@ python -m src.run_training --orth polar_express --pe-t 5 --pe-lower-bound 1e-3 .
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--ns-t` | int | `5` | Newton-Schulz 总迭代数 |
-| `--fast-steps` | int | — | 快速系数步数（None 时使用 ns_t 作为 fast_steps） |
-| `--stable-steps` | int | — | 稳定系数步数（须满足 fast_steps + stable_steps = ns_t） |
+| `--fast-steps` | int | `5` | 快速系数步数 |
+| `--stable-steps` | int | `0` | 稳定系数步数（须满足 fast_steps + stable_steps = 5） |
 
 #### Polar Express 模式专属参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--pe-t` | int | `5` | Polar Express 迭代数 |
 | `--pe-lower-bound` | str | `1e-3` | 奇异值下界 |
 | `--pe-cushion` | float | `2e-2` | cushion 参数 |
 | `--pe-safety-factor` | float | `2e-2` | 安全因子 |
@@ -77,8 +75,6 @@ python -m src.run_training --orth polar_express --pe-t 5 --pe-lower-bound 1e-3 .
 | `--eval-batch-size` | int | — | 验证批次大小（None 时自动计算） |
 | `--eval-at-start` | flag | False | 训练开始前先做一次验证 |
 | `--log-every-steps` | int | `20` | 训练指标日志间隔（步数） |
-| `--extension-steps` | int | `0` | 主训练结束后额外训练的步数 |
-| `--val-loss-every-steps` | int | `0` | 验证 loss 计算间隔（步数，0 表示不启用） |
 | `--model-max-seq-len` | int | `0` | 最大序列长度（0 使用默认 2048） |
 
 #### 日志与 W&B
@@ -98,18 +94,11 @@ python -m src.run_training --orth polar_express --pe-t 5 --pe-lower-bound 1e-3 .
 | `--spectral-max-matrices` | int | `5` | 谱分析最大矩阵数 |
 | `--spectral-max-dim` | int | `1024` | 谱分析最大维度 |
 
-#### 路径与分布式
+#### 分布式
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--runs-root` | str | `runs/` | 运行输出根目录 |
-| `--training-root` | str | `training/` | 训练产物根目录 |
-| `--trainer-py` | str | — | 自定义训练脚本路径 |
 | `--nproc-per-node` | int | `1` | 每节点进程数（torchrun 用） |
-| `--train-files` | str | — | 训练数据文件（glob pattern） |
-| `--val-files` | str | — | 验证数据文件（glob pattern） |
-
-> **注意**：以上所有参数均可通过同名大写环境变量设置（如 `TRAIN_TOKEN_BUDGET=50000000`），`--` 中划线在环境变量中改为下划线。
 
 ## 2. 完整实验计划（`python -m src.experiment_plan`）
 
@@ -138,19 +127,12 @@ python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
 | `--eval-batch-size` | int | — | 验证批次大小 |
 | `--eval-at-start` | flag | False | 训练开始前先做一次验证 |
 | `--log-every-steps` | int | `20` | 训练指标日志间隔（步数） |
-| `--extension-steps` | int | `0` | 主训练结束后额外训练的步数 |
-| `--val-loss-every-steps` | int | `0` | 验证 loss 计算间隔（步数，0 表示不启用） |
 | `--wandb` | str | `on` | W&B 开关：`on` / `off` |
 | `--wandb-project` | str | `muon-nanogpt` | W&B 项目名 |
 | `--wandb-entity` | str | — | W&B entity 名 |
 | `--wandb-mode` | str | — | W&B 模式（如 `offline`、`dryrun`） |
-| `--runs-root` | str | — | 运行输出根目录 |
-| `--training-root` | str | — | 训练产物根目录 |
-| `--trainer-py` | str | — | 自定义训练脚本路径 |
 | `--nproc-per-node` | int | `1` | 每节点进程数 |
 | `--data-path` | str | — | 数据集根目录 |
-| `--train-files` | str | — | 训练数据文件（glob pattern） |
-| `--val-files` | str | — | 验证数据文件（glob pattern） |
 | `--model-max-seq-len` | int | `0` | 最大序列长度（0 使用默认 2048） |
 | `--spectral-every-tokens` | int | `10000000` | 谱分析间隔（token 数） |
 | `--spectral-max-matrices` | int | `5` | 谱分析最大矩阵数 |

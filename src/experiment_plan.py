@@ -26,10 +26,8 @@ class RunSpec:
     train_token_budget: int = DEFAULT_TRAIN_TOKEN_BUDGET
     eval_every_tokens: int = DEFAULT_EVAL_EVERY_TOKENS
     eval_tokens: int = DEFAULT_EVAL_TOKENS
-    ns_t: int | None = None
     fast_steps: int | None = None
     stable_steps: int | None = None
-    pe_t: int | None = None
     pe_lower_bound: str | None = None
 
     def to_cli_args(self) -> list[str]:
@@ -44,13 +42,11 @@ class RunSpec:
         ]
         if self.orth == "manual":
             args.extend([
-                "--ns-t", str(self.ns_t),
                 "--fast-steps", str(self.fast_steps),
                 "--stable-steps", str(self.stable_steps),
             ])
         elif self.orth == "polar_express":
             args.extend([
-                "--pe-t", str(self.pe_t),
                 "--pe-lower-bound", str(self.pe_lower_bound),
             ])
         return args
@@ -81,9 +77,9 @@ def build_run_specs(
         specs.extend([
             RunSpec("adamw", f"adamw_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
             RunSpec("vanilla", f"vanilla_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
-            RunSpec("manual", f"manual_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, ns_t=5, fast_steps=3, stable_steps=2),
+            RunSpec("manual", f"manual_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, fast_steps=3, stable_steps=2),
             RunSpec("fast", f"fast_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
-            RunSpec("polar_express", f"polar_express_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, pe_t=5, pe_lower_bound="1e-3"),
+            RunSpec("polar_express", f"polar_express_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, pe_lower_bound="1e-3"),
         ])
     return specs
 
@@ -107,10 +103,6 @@ def parse_args() -> argparse.Namespace:
                         help="Run evaluation at the start of training")
     parser.add_argument("--log-every-steps", type=int, default=20,
                         help="Log training metrics every N steps")
-    parser.add_argument("--extension-steps", type=int, default=0,
-                        help="Additional training steps after main training")
-    parser.add_argument("--val-loss-every-steps", type=int, default=0,
-                        help="Evaluate validation loss every N steps")
 
     parser.add_argument("--wandb", choices=["on", "off"], default="on",
                         help="Enable or disable Weights & Biases logging")
@@ -131,10 +123,6 @@ def parse_args() -> argparse.Namespace:
                         help="Number of processes per node")
     parser.add_argument("--data-path",
                         help="Path to training data directory")
-    parser.add_argument("--train-files",
-                        help="Glob pattern or path for training data files")
-    parser.add_argument("--val-files",
-                        help="Glob pattern or path for validation data files")
     parser.add_argument("--model-max-seq-len", type=int, default=0,
                         help="Maximum sequence length for the model (0 for default)")
     
@@ -158,8 +146,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
     command.extend([
         "--train-grad-accum-steps", str(args.train_grad_accum_steps),
         "--log-every-steps", str(args.log_every_steps),
-        "--extension-steps", str(args.extension_steps),
-        "--val-loss-every-steps", str(args.val_loss_every_steps),
         "--wandb", args.wandb,
         "--wandb-project", args.wandb_project,
         "--nproc-per-node", str(args.nproc_per_node),
@@ -183,10 +169,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
         command.extend(["--trainer-py", args.trainer_py])
     if args.data_path:
         command.extend(["--data-path", args.data_path])
-    if args.train_files:
-        command.extend(["--train-files", args.train_files])
-    if args.val_files:
-        command.extend(["--val-files", args.val_files])
     if args.model_max_seq_len > 0:
         command.extend(["--model-max-seq-len", str(args.model_max_seq_len)])
     subprocess.run(command, cwd=ROOT, check=True)
