@@ -118,9 +118,3 @@ class TrainingManager:
 
     def get_state(self):
         return copy.deepcopy(self.optimizer.state_dict())
-
-    def sparse_index_update(self, step, bigram_indexes):
-        pass
-
-    def sparse_index_share(self, step):
-        pass

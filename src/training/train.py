@@ -9,12 +9,7 @@ from torch import nn
 from model import GPT
 from optim import TrainingManager
 from orth import OrthogonalizerConfig, build_orthogonalizer_config, make_polar_express
-from run_support import (
-    Logger,
-    run_training_loop,
-    setup_device,
-)
-from utils import resolve_data_files
+from run_support import Logger, run_training_loop, setup_device
 from config import TRAINING, MODEL, OPTIMIZER, get_orthogonalization
 
 
@@ -33,19 +28,27 @@ def default_run_name(orth: str, seed: int) -> str:
     raise SystemExit(f"Unknown orth={orth}")
 
 
+def _resolve_data_files(data_path: str) -> tuple[str, str]:
+    dp = Path(data_path)
+    train_pattern = "fineweb_train_*.bin"
+    val_pattern = "fineweb_val_*.bin"
+    if not any(dp.glob(train_pattern)):
+        raise FileNotFoundError(f"No training files matching {train_pattern} in {dp}")
+    if not any(dp.glob(val_pattern)):
+        raise FileNotFoundError(f"No validation files matching {val_pattern} in {dp}")
+    return str(dp / train_pattern), str(dp / val_pattern)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch one configured training run.")
     parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"], default="fast",
                         help="Orthogonalization strategy")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed")
-    parser.add_argument("--name", default=None,
-                        help="Run name (auto-generated if not set)")
     parser.add_argument("--data-path", required=True,
                         help="Path to training data directory")
     args = parser.parse_args()
-    if args.name is None:
-        args.name = default_run_name(args.orth, args.seed)
+    args.name = default_run_name(args.orth, args.seed)
     return args
 
 
@@ -68,13 +71,8 @@ def dispatch_orth_config(orth: str) -> tuple[OrthogonalizerConfig, object, float
     return orth_config, polar_express, base_lr
 
 
-def build_model(
-    val_batch_size: int,
-    device: torch.device,
-    model_max_seq_len: int,
-) -> nn.Module:
-    if model_max_seq_len <= 0:
-        model_max_seq_len = max(val_batch_size, TRAINING.seq_len)
+def build_model(device: torch.device) -> nn.Module:
+    model_max_seq_len = TRAINING.seq_len * TRAINING.grad_accum_steps
     model = GPT(
         vocab_size=50257,
         num_layers=11,
@@ -102,7 +100,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     orth_config, polar_express, base_lr = dispatch_orth_config(args.orth)
-    train_files, val_files = resolve_data_files(args.data_path)
+    train_files, val_files = _resolve_data_files(args.data_path)
 
     train_steps = math.ceil(TRAINING.train_token_budget / TRAINING.batch_tokens)
 
@@ -114,10 +112,6 @@ def main() -> None:
         orth_config=orth_config,
         run_dir=run_dir,
     )
-
-    val_batch_size = TRAINING.eval_batch_size
-    if val_batch_size is None:
-        val_batch_size = TRAINING.grad_accum_steps * TRAINING.seq_len
 
     print("=" * 80)
     print(f"run: {args.name}")
@@ -131,7 +125,7 @@ def main() -> None:
     print(f"Running PyTorch {torch.__version__} compiled for CUDA {torch.version.cuda}")
     print("=" * 100)
 
-    model = build_model(val_batch_size, device, TRAINING.model_max_seq_len)
+    model = build_model(device)
 
     training_manager = TrainingManager(
         model,
@@ -149,15 +143,12 @@ def main() -> None:
         train_files=train_files,
         val_files=val_files,
         val_tokens=TRAINING.eval_tokens,
-        val_batch_size=val_batch_size,
         bigram_vocab_size=MODEL.bigram_vocab_size,
         train_steps=train_steps,
         grad_accum_steps=TRAINING.grad_accum_steps,
         logger=logger,
         log_every_steps=TRAINING.log_every_steps,
         eval_every_tokens=TRAINING.eval_every_tokens,
-        eval_at_start=TRAINING.eval_at_start,
-        val_loss_every=TRAINING.val_loss_every,
         spectral_every_tokens=TRAINING.spectral_every_tokens,
         spectral_max_matrices=TRAINING.spectral_max_matrices,
         spectral_max_dim=TRAINING.spectral_max_dim,

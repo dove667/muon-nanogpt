@@ -8,18 +8,12 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。162M 模型在�
 
 ## 配置
 
-所有固定超参数集中在项目根 `config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 4 个参数。
+所有固定超参数集中在项目根 `config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 3 个参数。
 
 ## 1. 单次训练
 
 ```bash
 python src/training/train.py --orth fast --seed 0 --data-path /data/fineweb10B
-```
-
-指定运行名称（不指定则自动生成）：
-
-```bash
-python src/training/train.py --orth vanilla --seed 1 --name my_run --data-path /data/fineweb10B
 ```
 
 五种 orth 模式：
@@ -38,7 +32,6 @@ python src/training/train.py --orth polar_express --seed 0 --data-path /data/fin
 |---|---|---|---|
 | `--orth` | str | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
 | `--seed` | int | `0` | 随机种子 |
-| `--name` | str | 自动生成 | 运行名称（输出目录名） |
 | `--data-path` | str | **必传** | 数据集根目录 |
 
 所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `config.yaml` 中管理。

@@ -7,7 +7,7 @@
 
 ## 训练入口
 
-- 单次训练：`python src/training/train.py --orth <mode> --seed <n> --data-path /data/fineweb10B [--name <name>]`
+- 单次训练：`python src/training/train.py --orth <mode> --seed <n> --data-path /data/fineweb10B`
 - 完整实验（5 配置 × 3 seeds = 15 runs）：`python -m src.experiment_plan --data-path /data/fineweb10B [--skip-completed-runs]`
 - 162M 模型 4090 单卡完全够用，无分布式逻辑
 - 并行跑多个独立实验用 `CUDA_VISIBLE_DEVICES=0 python ...`
@@ -16,7 +16,7 @@
 
 - **`config.yaml`**（项目根）是唯一配置来源，包含所有固定训练/模型/优化器/正交化超参数
 - `src/training/config/` 负责 YAML 加载，导出 `TRAINING` `MODEL` `OPTIMIZER` 模块级常量
-- train.py CLI 仅暴露必须变化的 4 个参数：`--data-path` `--orth` `--seed` `--name`
+- train.py CLI 仅暴露必须变化的 3 个参数：`--data-path` `--orth` `--seed`
 
 ## 五种 orth 模式
 

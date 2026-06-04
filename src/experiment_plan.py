@@ -2,7 +2,6 @@ import argparse
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 from src.utils import ROOT, RUNS_ROOT
 

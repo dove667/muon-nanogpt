@@ -11,7 +11,7 @@ from torch import nn
 
 from data import data_generator
 from metrics import collect_spectral_metrics, current_grad_norm
-from config import TRAINING, MODEL
+from config import TRAINING
 from orth import OrthogonalizerConfig
 
 def setup_device(*, base_seed: int) -> torch.device:
@@ -66,7 +66,6 @@ def run_validation(
     training_manager,
     val_files: str,
     val_tokens: int,
-    val_batch_size: int,
     bigram_vocab_size: int,
     grad_accum_steps: int,
     logger: Logger,
@@ -75,6 +74,7 @@ def run_validation(
     training_time_ms: float,
     wall_start_time: float,
 ) -> None:
+    val_batch_size = grad_accum_steps * TRAINING.seq_len
     eval_start_time = time.perf_counter()
     model.eval()
     assert val_tokens % val_batch_size == 0
@@ -122,15 +122,12 @@ def run_training_loop(
     train_files: str,
     val_files: str,
     val_tokens: int,
-    val_batch_size: int,
     bigram_vocab_size: int,
     train_steps: int,
     grad_accum_steps: int,
     logger: Logger,
     log_every_steps: int,
     eval_every_tokens: int,
-    eval_at_start: bool,
-    val_loss_every: int,
     spectral_every_tokens: int,
     spectral_max_matrices: int,
     spectral_max_dim: int,
@@ -145,7 +142,7 @@ def run_training_loop(
 
     training_time_ms = 0.0
     training_manager.global_train_tokens = 0
-    next_eval_tokens = 0 if eval_at_start else eval_every_tokens
+    next_eval_tokens = eval_every_tokens
     next_spectral_tokens = spectral_every_tokens
 
     wall_start_time = time.perf_counter()
@@ -159,8 +156,7 @@ def run_training_loop(
             eval_every_tokens > 0
             and training_manager.global_train_tokens >= next_eval_tokens
         )
-        should_eval_by_steps = val_loss_every > 0 and step % val_loss_every == 0
-        if last_step or should_eval_by_tokens or should_eval_by_steps:
+        if last_step or should_eval_by_tokens:
             torch.cuda.synchronize()
             training_time_ms += 1000 * (time.perf_counter() - t0)
             run_validation(
@@ -168,7 +164,6 @@ def run_training_loop(
                 training_manager=training_manager,
                 val_files=val_files,
                 val_tokens=val_tokens,
-                val_batch_size=val_batch_size,
                 bigram_vocab_size=bigram_vocab_size,
                 grad_accum_steps=grad_accum_steps,
                 logger=logger,
@@ -196,16 +191,14 @@ def run_training_loop(
 
         grad_scale = 1.0 / grad_accum_steps
         for _ in range(grad_accum_steps):
-            inputs, targets, cum_seqlens, bigram_inputs, bigram_cpu = train_loader.send(
+            inputs, targets, cum_seqlens, bigram_inputs, _bigram_cpu = train_loader.send(
                 training_manager.train_loader_send_args
             )
-            training_manager.sparse_index_update(step, bigram_cpu)
             loss = model(
                 inputs, targets, cum_seqlens, bigram_inputs, training_manager.get_forward_args(),
             ).sum() * grad_scale
             if should_log:
                 train_loss_accum += float(loss.detach())
-            training_manager.sparse_index_share(step)
             loss.backward()
 
         if should_log:
