@@ -30,14 +30,12 @@ def load_data_shard(file: Path):
 
 
 class Shard:
-    def __init__(self, tokens: Tensor, world_size: int = 1):
+    def __init__(self, tokens: Tensor):
         self.tokens = tokens
         self.size = tokens.numel()
-        self.world_size = world_size
         self.i = 0
         self.bos_idx = (tokens[:6_000_000] == BOS_ID).nonzero(as_tuple=True)[0].to(torch.int64).cpu().numpy()
         self._full_idx = None
-        self._loader_thread = None
         self._ready = threading.Event()
         self._loader_thread = threading.Thread(target=self._scan)
         self._loader_thread.start()
@@ -54,32 +52,31 @@ class Shard:
     def next_batch(self, num_tokens_local: int, max_seq_len: int):
         self._maybe_switch()
         n = len(self.bos_idx)
-        starts = [[] for _ in range(self.world_size)]
-        ends = [[] for _ in range(self.world_size)]
+        starts = []
+        ends = []
 
         idx = self.i
-        for r in range(self.world_size):
-            cur_len = 0
-            while cur_len <= num_tokens_local:
-                if idx >= n:
-                    raise StopIteration("Insufficient BOS ahead; hit tail of shard.")
-                cur = self.bos_idx[idx]
-                starts[r].append(cur)
-                idx += 1
-                end = min(self.bos_idx[idx] if idx < n else self.size, cur + max_seq_len, cur + num_tokens_local - cur_len + 1)
-                ends[r].append(end)
-                cur_len += end - cur
-            assert cur_len == num_tokens_local + 1
+        cur_len = 0
+        while cur_len <= num_tokens_local:
+            if idx >= n:
+                raise StopIteration("Insufficient BOS ahead; hit tail of shard.")
+            cur = self.bos_idx[idx]
+            starts.append(cur)
+            idx += 1
+            end = min(self.bos_idx[idx] if idx < n else self.size, cur + max_seq_len, cur + num_tokens_local - cur_len + 1)
+            ends.append(end)
+            cur_len += end - cur
+        assert cur_len == num_tokens_local + 1
         self.i = idx
         return starts, ends
 
     @staticmethod
-    def load_async(file: Path, world_size: int = 1):
+    def load_async(file: Path):
         result = {}
         ready = threading.Event()
         def load():
             tokens = load_data_shard(file)
-            result["shard"] = Shard(tokens, world_size)
+            result["shard"] = Shard(tokens)
             ready.set()
         thread = threading.Thread(target=load)
         thread.start()
@@ -102,8 +99,7 @@ def get_bigram_hash(x: Tensor, bigram_vocab_size: int):
     return out
 
 
-def distributed_data_generator(filename_pattern: str, num_tokens: int, max_seq_len: int, grad_accum_steps: int, align_to_bos: bool, rank: int, world_size: int, bigram_vocab_size: int):
-    assert num_tokens % (world_size * grad_accum_steps) == 0, "Batch size must be divisible by world size"
+def data_generator(filename_pattern: str, num_tokens: int, max_seq_len: int, grad_accum_steps: int, align_to_bos: bool, bigram_vocab_size: int):
     num_tokens = num_tokens // grad_accum_steps
     files = [Path(file) for file in sorted(glob.glob(filename_pattern))]
     if not files:
@@ -112,37 +108,37 @@ def distributed_data_generator(filename_pattern: str, num_tokens: int, max_seq_l
     file_iter = cycle(files)
     tokens = load_data_shard(next(file_iter))
     if align_to_bos:
-        shard = Shard(tokens, world_size)
-        next_shard_getter = Shard.load_async(next(file_iter), world_size)
+        shard = Shard(tokens)
+        next_shard_getter = Shard.load_async(next(file_iter))
     else:
         pos = 0
 
     while True:
-        num_tokens_local = num_tokens // world_size
+        num_tokens_local = num_tokens
         max_num_docs = TRAIN_MAX_NUM_DOCS.get(num_tokens_local, next_multiple_of_n(num_tokens_local // 300, n=128))
 
         if align_to_bos:
             try:
                 seq_starts, seq_ends = shard.next_batch(num_tokens_local, max_seq_len)
-                start_idxs, end_idxs = torch.tensor(seq_starts[rank]), torch.tensor(seq_ends[rank])
             except StopIteration:
                 shard = next_shard_getter()
                 tokens = shard.tokens
                 try:
-                    next_shard_getter = Shard.load_async(next(file_iter), world_size)
+                    next_shard_getter = Shard.load_async(next(file_iter))
                 except StopIteration:
                     next_shard_getter = None
                 continue
-            buf = torch.cat([tokens[i:j] for i, j in zip(start_idxs, end_idxs)])
+            buf = torch.cat([tokens[i:j] for i, j in zip(seq_starts, seq_ends)])
             _inputs = buf[:-1]
             _targets = buf[1:]
-            end_idxs[-1] -= 1
-            cum_lengths = (end_idxs - start_idxs).cumsum(0)
+            seq_ends[-1] -= 1
+            seq_starts_t = torch.tensor(seq_starts)
+            seq_ends_t = torch.tensor(seq_ends)
+            cum_lengths = (seq_ends_t - seq_starts_t).cumsum(0)
         else:
             if pos + num_tokens + 1 >= len(tokens):
                 tokens, pos = load_data_shard(next(file_iter)), 0
-            pos_local = pos + rank * num_tokens_local
-            buf = tokens[pos_local: pos_local + num_tokens_local + 1]
+            buf = tokens[pos: pos + num_tokens_local + 1]
             _inputs = buf[:-1].view(num_tokens_local,)
             _targets = buf[1:].view(num_tokens_local,)
             cum_lengths = torch.nonzero(_inputs == BOS_ID)[:, 0]
@@ -167,6 +163,5 @@ def distributed_data_generator(filename_pattern: str, num_tokens: int, max_seq_l
 
         if new_params is not None:
             new_num_tokens, new_max_seq_len, new_grad_accum_steps = new_params
-            assert new_num_tokens % (world_size * new_grad_accum_steps) == 0, "Num tokens must be divisible by world size"
             num_tokens = new_num_tokens // new_grad_accum_steps
             max_seq_len = new_max_seq_len

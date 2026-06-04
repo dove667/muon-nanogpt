@@ -2,7 +2,7 @@
 
 ## 环境
 
-默认实验环境是 4× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121。现在单次训练入口已经直接收敛到 `src/training/train.py`：1 卡可直接运行，只有在 `--nproc-per-node > 1` 时才会自动转成 `torchrun`。
+默认实验环境是 RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。162M 模型在单卡上完全够用。
 
 数据路径按实际位置设置，以下示例中用 `/data/fineweb10B` 代替。
 
@@ -20,7 +20,7 @@ python src/training/train.py \
   --wandb off
 ```
 
-如果要用 4 卡分布式，只需要额外给 `--nproc-per-node 4`，训练脚本会自动用 `torchrun` 重启自己。研究阶段如果你更想并行跑 4 个独立实验，通常更推荐 `CUDA_VISIBLE_DEVICES=0/1/2/3` 分别起 4 个单卡 run，而不是把 4 张卡绑成一个 DDP run。
+如需多卡分布式，手动 `torchrun` 启动。
 
 使用 Manual、Fast、AdamW 或 Polar Express 时可这样切换：
 
@@ -133,13 +133,6 @@ python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
 | `--wandb-project` | str | `muon-nanogpt` | W&B 项目名 |
 | `--wandb-entity` | str | — | W&B entity 名 |
 | `--wandb-mode` | str | — | W&B 模式（如 `offline`、`dryrun`） |
-| `--nproc-per-node` | int | `1` | 每节点进程数 |
-| `--data-path` | str | — | 数据集根目录 |
-| `--model-max-seq-len` | int | `0` | 最大序列长度（0 使用默认 2048） |
-| `--spectral-every-tokens` | int | `10000000` | 谱分析间隔（token 数） |
-| `--spectral-max-matrices` | int | `5` | 谱分析最大矩阵数 |
-| `--spectral-max-dim` | int | `1024` | 谱分析最大维度 |
-
 ## 3. 分析报告
 
 ### 3.1 汇总 CSV（`python -m src.analysis.summarize_runs`）
@@ -191,7 +184,6 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 |---|---|
 | `config.json` | 完整配置快照 |
 | `metrics.jsonl` | 每步一条 JSON（训练指标、验证指标、谱指标） |
-| `console.log` | 单卡或 launcher 标准输出 |
 
 分析脚本读取 `runs/` 并输出到 `results/`：
 

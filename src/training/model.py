@@ -3,7 +3,6 @@ import math
 from dataclasses import dataclass
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 
@@ -22,18 +21,12 @@ def softcapped_cross_entropy(x: Tensor, target_seq: Tensor, weight: Tensor) -> T
     return F.cross_entropy(logits.float(), target_seq, reduction="none")
 
 args = None
-world_size = None
-grad_accum_steps = None
-grad_scale = None
 device = None
 
 
-def setup_model_runtime(*, args_value, world_size_value, grad_accum_steps_value, grad_scale_value, device_value):
-    global args, world_size, grad_accum_steps, grad_scale, device
+def setup_model_runtime(*, args_value, grad_accum_steps_value, device_value):
+    global args, device
     args = args_value
-    world_size = world_size_value
-    grad_accum_steps = grad_accum_steps_value
-    grad_scale = grad_scale_value
     device = device_value
 
 
@@ -203,7 +196,7 @@ class CausalSelfAttention(nn.Module):
         train_max_seq_len = attn_args.train_max_seq_len
 
         q, k, v = F.linear(x, sa_lambdas[0] * qkvo_w[:self.dim * 3].type_as(x)).view(B, T, 3 * self.num_heads, self.head_dim).chunk(3, dim=-2)
-        max_len = train_max_seq_len if self.training else (args.val_batch_size // (grad_accum_steps * world_size))
+        max_len = train_max_seq_len if self.training else args.val_batch_size
 
         q, k = norm(q), norm(k) # QK norm @Grad62304977
 
@@ -303,15 +296,13 @@ class GPT(nn.Module):
         self._num_attn_layers = num_attn_layers
         num_qk_groups = num_attn_layers * 2 * (num_heads // 2)  # 10 * 2 * 3 = 60
         self._num_qk_groups = num_qk_groups
-        num_qk_padded = next_multiple_of_n(num_qk_groups, n=world_size)  # 64
-        self.qk_bank = nn.Parameter(torch.empty(num_qk_padded, head_dim * 2, model_dim))
-        self.qk_bank.reshape = (num_qk_padded, head_dim * 2, model_dim)
+        self.qk_bank = nn.Parameter(torch.empty(num_qk_groups, head_dim * 2, model_dim))
+        self.qk_bank.reshape = (num_qk_groups, head_dim * 2, model_dim)
 
         # VO bank: per-layer Muon groups for V and O weights
         num_vo_real = num_attn_layers * 2  # 20
-        num_vo_padded = next_multiple_of_n(num_vo_real, n=world_size)  # 24
-        self.vo_bank = nn.Parameter(torch.empty(num_vo_padded, hdim, hdim))
-        self.vo_bank.reshape = (num_vo_padded, hdim, hdim)
+        self.vo_bank = nn.Parameter(torch.empty(num_vo_real, hdim, hdim))
+        self.vo_bank.reshape = (num_vo_real, hdim, hdim)
 
         # MLP bank: stores c_fc and c_proj for all MLP layers
         # We add 1 padding layer (index 11) to get 12*2=24 matrices for even distribution across 8 GPUs
@@ -358,7 +349,7 @@ class GPT(nn.Module):
         # sqrt(1.1) per sublayer so cumulative per-layer scaling is 1.1
         self.resid_lambdas = nn.Parameter(torch.full((num_layers, 2), 1.1**0.5))
 
-        pad = (-num_layers * 2 - 3) % (dist.get_world_size() if dist.is_initialized() else 1)
+        pad = 0
         self.scalars = nn.Parameter(
             torch.cat(
                 [

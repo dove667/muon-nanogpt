@@ -116,8 +116,6 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--runs-root",
                         help="Root directory for run outputs")
-    parser.add_argument("--nproc-per-node", type=int, default=1,
-                        help="Number of processes per node")
     parser.add_argument("--data-path",
                         help="Path to training data directory")
     parser.add_argument("--model-max-seq-len", type=int, default=0,
@@ -145,7 +143,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
         "--log-every-steps", str(args.log_every_steps),
         "--wandb", args.wandb,
         "--wandb-project", args.wandb_project,
-        "--nproc-per-node", str(args.nproc_per_node),
         "--spectral-every-tokens", str(args.spectral_every_tokens),
         "--spectral-max-matrices", str(args.spectral_max_matrices),
         "--spectral-max-dim", str(args.spectral_max_dim),

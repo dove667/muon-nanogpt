@@ -10,65 +10,24 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.distributed as dist
 from torch import nn
 
-from data_pipeline import distributed_data_generator
+from data_pipeline import data_generator
 from metrics import collect_spectral_metrics, current_grad_norm
 
 
-@dataclass(slots=True)
-class DistributedContext:
-    rank: int
-    world_size: int
-    grad_accum_steps: int
-    grad_scale: float
-    device: torch.device
-    master_process: bool
-    base_seed: int
-
-
-
-def setup_distributed_from_env() -> DistributedContext:
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    torch.empty(1, device=f"cuda:{local_rank}", requires_grad=True).backward()
-
-    rank = int(os.environ.get("RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    if world_size > 1:
-        assert 8 % world_size == 0, "world_size must be a divisor of 8"
-
-    grad_accum_steps = int(
-        os.environ.get(
-            "TRAIN_GRAD_ACCUM_STEPS",
-            os.environ.get("SPEEDTEST_GRAD_ACCUM_STEPS", 8 // world_size),
-        )
-    )
-    grad_scale = 1 / grad_accum_steps
-
+def setup_device(*, base_seed: int) -> tuple[torch.device, int]:
     assert torch.cuda.is_available()
-    device = torch.device("cuda", local_rank)
+    device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
 
-    if world_size > 1:
-        dist.init_process_group(backend="cuda:nccl,cpu:gloo", device_id=device)
-        dist.barrier()
+    random.seed(base_seed)
+    np.random.seed(base_seed)
+    torch.manual_seed(base_seed)
+    torch.cuda.manual_seed_all(base_seed)
 
-    base_seed = int(os.environ.get("SEED", "0"))
-    random.seed(base_seed + rank)
-    np.random.seed(base_seed + rank)
-    torch.manual_seed(base_seed + rank)
-    torch.cuda.manual_seed_all(base_seed + rank)
-
-    return DistributedContext(
-        rank=rank,
-        world_size=world_size,
-        grad_accum_steps=grad_accum_steps,
-        grad_scale=grad_scale,
-        device=device,
-        master_process=(rank == 0),
-        base_seed=base_seed,
-    )
+    grad_accum_steps = int(os.environ.get("TRAIN_GRAD_ACCUM_STEPS", "16"))
+    return device, grad_accum_steps
 
 
 def nvidia_smi_output() -> str:
@@ -84,7 +43,6 @@ class RunLogger:
     def __init__(
         self,
         *,
-        master_process: bool,
         args,
         orth_config: dict,
         orth_mode: str,
@@ -92,11 +50,9 @@ class RunLogger:
         lr_mul: float,
         train_token_budget: int,
         eval_every_tokens: int,
-        world_size: int,
         grad_accum_steps: int,
         device: torch.device,
     ) -> None:
-        self.master_process = master_process
         self.args = args
         self.orth_mode = orth_mode
         self.orth_schedule_name = orth_schedule_name
@@ -119,9 +75,6 @@ class RunLogger:
         self.metrics_file = None
         self.config_file = None
 
-        if not self.master_process:
-            return
-
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.run_dir / "metrics.jsonl"
         self.config_file = self.run_dir / "config.json"
@@ -143,7 +96,6 @@ class RunLogger:
             "model_size": "train_gpt_11L_768D",
             "seq_len": int(os.environ.get("TRAIN_SEQ_LEN", "2048")),
             "grad_accum": grad_accum_steps,
-            "world_size": world_size,
             "train_token_budget": train_token_budget,
             "eval_every_tokens": eval_every_tokens,
             "eval_tokens": args.val_tokens,
@@ -181,13 +133,9 @@ class RunLogger:
         return payload
 
     def print0(self, message: str) -> None:
-        if not self.master_process:
-            return
         print(message)
 
     def log_metric(self, record: dict, step_value: int | None = None) -> None:
-        if not self.master_process:
-            return
         payload = self._with_common_fields(record, step_value=step_value)
         with self.metrics_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
@@ -197,7 +145,7 @@ class RunLogger:
     def log_spectral(self, summary_record: dict, detail_records: list[dict], step_value: int | None = None) -> None:
         if summary_record:
             self.log_metric(summary_record, step_value=step_value)
-        if not self.master_process or not self.spectral_details_enabled or not detail_records:
+        if not self.spectral_details_enabled or not detail_records:
             return
         with self.spectral_details_file.open("a", encoding="utf-8") as handle:
             for record in detail_records:
@@ -243,8 +191,8 @@ def run_validation(
     model: nn.Module,
     training_manager,
     args,
-    dist_ctx,
-    logger,
+    grad_accum_steps: int,
+    logger: RunLogger,
     step: int,
     train_steps: int,
     training_time_ms: float,
@@ -253,12 +201,12 @@ def run_validation(
     eval_start_time = time.perf_counter()
     model.eval()
     assert args.val_tokens % args.val_batch_size == 0
-    val_steps = dist_ctx.grad_accum_steps * args.val_tokens // args.val_batch_size
-    val_loader = distributed_data_generator(
-        args.val_files, args.val_batch_size, -1, dist_ctx.grad_accum_steps,
-        False, dist_ctx.rank, dist_ctx.world_size, args.bigram_vocab_size,
+    val_steps = grad_accum_steps * args.val_tokens // args.val_batch_size
+    val_loader = data_generator(
+        args.val_files, args.val_batch_size, -1, grad_accum_steps,
+        False, args.bigram_vocab_size,
     )
-    val_loss = 0
+    val_loss = torch.tensor(0.0, device=training_manager.device)
     with torch.no_grad():
         for _ in range(val_steps):
             inputs, targets, cum_seqlens, bigram_inputs, _ = next(val_loader)
@@ -267,8 +215,6 @@ def run_validation(
             ).mean()
     val_loss /= val_steps
     del val_loader
-    if dist.is_initialized():
-        dist.reduce(val_loss, 0, op=dist.ReduceOp.AVG)
     eval_time_s = time.perf_counter() - eval_start_time
     logger.print0(
         f"step:{step}/{train_steps} val_loss:{val_loss:.4f} "
@@ -300,13 +246,13 @@ def run_training_loop(
     args,
     training_stages,
     training_schedule,
-    dist_ctx,
-    logger,
+    grad_accum_steps: int,
+    logger: RunLogger,
     loop_config: LoopConfig,
 ) -> None:
-    train_loader = distributed_data_generator(
+    train_loader = data_generator(
         args.train_files, training_stages[0].batch_size, training_stages[0].train_max_seq_len,
-        dist_ctx.grad_accum_steps, True, dist_ctx.rank, dist_ctx.world_size, args.bigram_vocab_size,
+        grad_accum_steps, True, args.bigram_vocab_size,
     )
     gc.collect()
 
@@ -336,7 +282,7 @@ def run_training_loop(
             training_time_ms += 1000 * (time.perf_counter() - t0)
             run_validation(
                 model=model, training_manager=training_manager, args=args,
-                dist_ctx=dist_ctx, logger=logger, step=step, train_steps=train_steps,
+                grad_accum_steps=grad_accum_steps, logger=logger, step=step, train_steps=train_steps,
                 training_time_ms=training_time_ms, wall_start_time=wall_start_time,
             )
             if loop_config.eval_every_tokens > 0:
@@ -356,14 +302,15 @@ def run_training_loop(
             torch.cuda.synchronize()
             step_wall_t0 = time.perf_counter()
 
-        for _ in range(dist_ctx.grad_accum_steps):
+        grad_scale = 1.0 / grad_accum_steps
+        for _ in range(grad_accum_steps):
             inputs, targets, cum_seqlens, bigram_inputs, bigram_cpu = train_loader.send(
                 training_manager.train_loader_send_args
             )
             training_manager.sparse_index_update(step, bigram_cpu)
             loss = model(
                 inputs, targets, cum_seqlens, bigram_inputs, training_manager.get_forward_args(),
-            ).sum() * dist_ctx.grad_scale
+            ).sum() * grad_scale
             if should_log:
                 train_loss_accum += float(loss.detach())
             training_manager.sparse_index_share(step)
@@ -417,7 +364,7 @@ def run_training_loop(
             spectral_summary, spectral_details = collect_spectral_metrics(
                 training_manager.optimizer,
                 global_train_tokens=training_manager.global_train_tokens,
-                master_process=dist_ctx.master_process,
+                master_process=True,
                 spectral_max_matrices=loop_config.spectral_max_matrices,
                 spectral_max_dim=loop_config.spectral_max_dim,
                 coeffs=loop_config.polar_express_coeffs,
@@ -428,17 +375,16 @@ def run_training_loop(
             while next_spectral_tokens <= training_manager.global_train_tokens:
                 next_spectral_tokens += loop_config.spectral_every_tokens
 
-    if dist_ctx.master_process:
-        logger.log_metric(
-            {
-                "memory/peak_allocated_mb": int(torch.cuda.max_memory_allocated() // 1024 // 1024),
-                "memory/peak_reserved_mb": int(torch.cuda.max_memory_reserved() // 1024 // 1024),
-                "train/final_tokens": int(training_manager.global_train_tokens),
-                "wall/final_elapsed_s": float(time.perf_counter() - wall_start_time),
-                "status": "completed",
-            },
-            step_value=train_steps,
-        )
+    logger.log_metric(
+        {
+            "memory/peak_allocated_mb": int(torch.cuda.max_memory_allocated() // 1024 // 1024),
+            "memory/peak_reserved_mb": int(torch.cuda.max_memory_reserved() // 1024 // 1024),
+            "train/final_tokens": int(training_manager.global_train_tokens),
+            "wall/final_elapsed_s": float(time.perf_counter() - wall_start_time),
+            "status": "completed",
+        },
+        step_value=train_steps,
+    )
     logger.print0(
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB",

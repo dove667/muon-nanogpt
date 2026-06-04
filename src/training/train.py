@@ -1,8 +1,6 @@
 import argparse
-import io
 import math
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,28 +16,13 @@ from run_support import (
     RunLogger,
     nvidia_smi_output,
     run_training_loop,
-    setup_distributed_from_env,
+    setup_device,
 )
 from schedule import Hyperparameters, TrainingSchedule, default_training_stages
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXED_BATCH_TOKENS = 8 * 2048 * 8
 FIXED_SEQ_LEN = 2048
-
-
-class Tee(io.TextIOBase):
-    def __init__(self, *streams: io.TextIOBase) -> None:
-        self.streams = streams
-
-    def write(self, data: str) -> int:
-        for stream in self.streams:
-            stream.write(data)
-            stream.flush()
-        return len(data)
-
-    def flush(self) -> None:
-        for stream in self.streams:
-            stream.flush()
 
 
 def compute_train_steps(train_token_budget: int) -> int:
@@ -94,8 +77,6 @@ def parse_args() -> argparse.Namespace:
                         help="Weights & Biases mode (e.g. offline, dryrun)")
     parser.add_argument("--runs-root", default=None,
                         help="Root directory for run outputs")
-    parser.add_argument("--nproc-per-node", type=int, default=1,
-                        help="Number of processes per node")
     parser.add_argument("--data-path", default=None,
                         help="Path to training data directory")
     parser.add_argument("--fast-steps", type=int, default=None,
@@ -129,153 +110,16 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def args_to_cli(args: argparse.Namespace) -> list[str]:
-    cli = [
-        "--orth", args.orth,
-        "--lr-mul", str(args.lr_mul),
-        "--seed", str(args.seed),
-        "--name", args.name,
-        "--train-token-budget", str(args.train_token_budget),
-        "--eval-every-tokens", str(args.eval_every_tokens),
-        "--eval-tokens", str(args.eval_tokens),
-        "--train-grad-accum-steps", str(args.train_grad_accum_steps),
-        "--eval-batch-size", str(args.eval_batch_size),
-        "--log-every-steps", str(args.log_every_steps),
-        "--wandb", args.wandb,
-        "--wandb-project", args.wandb_project,
-        "--nproc-per-node", str(args.nproc_per_node),
-        "--pe-lower-bound", str(args.pe_lower_bound),
-        "--pe-cushion", str(args.pe_cushion),
-        "--pe-safety-factor", str(args.pe_safety_factor),
-        "--spectral-every-tokens", str(args.spectral_every_tokens),
-        "--spectral-max-matrices", str(args.spectral_max_matrices),
-        "--spectral-max-dim", str(args.spectral_max_dim),
-    ]
-    if args.eval_at_start:
-        cli.append("--eval-at-start")
-    if args.wandb_entity:
-        cli.extend(["--wandb-entity", args.wandb_entity])
-    if args.wandb_mode:
-        cli.extend(["--wandb-mode", args.wandb_mode])
-    if args.runs_root:
-        cli.extend(["--runs-root", args.runs_root])
-    if args.data_path:
-        cli.extend(["--data-path", args.data_path])
-    if args.fast_steps is not None:
-        cli.extend(["--fast-steps", str(args.fast_steps)])
-    if args.stable_steps is not None:
-        cli.extend(["--stable-steps", str(args.stable_steps)])
-    if args.model_max_seq_len > 0:
-        cli.extend(["--model-max-seq-len", str(args.model_max_seq_len)])
-    return cli
-
-
-def prepare_env(args: argparse.Namespace) -> dict[str, str]:
-    env = os.environ.copy()
-    if args.runs_root:
-        runs_root = Path(args.runs_root).expanduser()
-    else:
-        runs_root = Path(env.get("RUNS_ROOT", ROOT / "runs"))
-    if not runs_root.is_absolute():
-        runs_root = ROOT / runs_root
-    run_dir = (runs_root / args.name).resolve()
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    env["ORTH"] = args.orth
-    env["LR_MUL"] = str(args.lr_mul)
-    env["BASE_LR"] = "0.008" if args.orth == "adamw" else "0.023"
-    env["SEED"] = str(args.seed)
-    env["TRAIN_TOKEN_BUDGET"] = str(args.train_token_budget)
-    env["TRAIN_STEPS"] = str(compute_train_steps(args.train_token_budget))
-    env["TRAIN_GRAD_ACCUM_STEPS"] = str(args.train_grad_accum_steps)
-    env["TRAIN_SEQ_LEN"] = str(FIXED_SEQ_LEN)
-    env["EVAL_EVERY_TOKENS"] = str(args.eval_every_tokens)
-    env["EVAL_TOKENS"] = str(args.eval_tokens)
-    env["EVAL_BATCH_SIZE"] = str(args.eval_batch_size)
-    env["EVAL_AT_START"] = "1" if args.eval_at_start else "0"
-    env["LOG_EVERY_STEPS"] = str(args.log_every_steps)
-    env["EXTENSION_STEPS"] = "0"
-    env["VAL_LOSS_EVERY_STEPS"] = "0"
-    env["WANDB"] = "1" if args.wandb == "on" else "0"
-    env["WANDB_PROJECT"] = args.wandb_project
-    env["WANDB_NAME"] = args.name
-    env.pop("WANDB_GROUP", None)
-    env["RUNS_ROOT"] = str(runs_root)
-    env["RUN_DIR"] = str(run_dir)
-    env["PYTHONUNBUFFERED"] = "1"
-    env.setdefault("TORCHINDUCTOR_CACHE_DIR", str(ROOT / ".torchinductor"))
-
-    if args.wandb_entity:
-        env["WANDB_ENTITY"] = args.wandb_entity
-    if args.wandb_mode:
-        env["WANDB_MODE"] = args.wandb_mode
-    elif args.wandb == "on" and not env.get("WANDB_API_KEY") and not Path.home().joinpath(".netrc").exists():
-        env["WANDB_MODE"] = "offline"
-    if args.data_path:
-        env["DATA_PATH"] = args.data_path
-    if args.orth == "manual":
-        env["FAST_STEPS"] = str(args.fast_steps)
-        env["STABLE_STEPS"] = str(args.stable_steps)
-    elif args.orth == "polar_express":
-        env["PE_LOWER_BOUND"] = str(args.pe_lower_bound)
-        env["PE_CUSHION"] = str(args.pe_cushion)
-        env["PE_SAFETY_FACTOR"] = str(args.pe_safety_factor)
-    if args.model_max_seq_len > 0:
-        env["MODEL_MAX_SEQ_LEN"] = str(args.model_max_seq_len)
-    env["SPECTRAL_EVERY_TOKENS"] = str(args.spectral_every_tokens)
-    env["SPECTRAL_MAX_MATRICES"] = str(args.spectral_max_matrices)
-    env["SPECTRAL_MAX_DIM"] = str(args.spectral_max_dim)
-    return env
-
-
-def launch_torchrun(args: argparse.Namespace) -> int:
-    env = prepare_env(args)
-    run_dir = Path(env["RUN_DIR"])
-    command = [
-        "torchrun",
-        "--standalone",
-        f"--nproc_per_node={args.nproc_per_node}",
-        str(Path(__file__).resolve()),
-        *args_to_cli(args),
-    ]
-    print("=" * 80)
-    print(f"run: {args.name}")
-    print(f"orth: {args.orth}")
-    print(f"train_token_budget: {args.train_token_budget}")
-    print(f"train_steps: {env['TRAIN_STEPS']}")
-    print(f"grad_accum: {args.train_grad_accum_steps}")
-    print(f"eval_every_tokens: {args.eval_every_tokens}")
-    print(f"eval_tokens: {args.eval_tokens}")
-    print(f"world_size: {args.nproc_per_node}")
-    print("=" * 80)
-    with (run_dir / "console.log").open("a", encoding="utf-8") as log_file:
-        process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            print(line, end="")
-            log_file.write(line)
-        return process.wait()
-
-
 def build_model(
     args: Hyperparameters,
     training_stages,
     device: torch.device,
-    world_batch_divisor: int,
 ) -> nn.Module:
     model_max_seq_len = int(
         os.environ.get(
             "MODEL_MAX_SEQ_LEN",
             max(
-                args.val_batch_size // world_batch_divisor,
+                args.val_batch_size,
                 max(stage.train_max_seq_len for stage in training_stages),
             ),
         )
@@ -299,38 +143,72 @@ def build_model(
     return model
 
 
-def broadcast_model(model: nn.Module) -> None:
-    if not torch.distributed.is_initialized():
-        return
-    for param in model.parameters():
-        torch.distributed.broadcast(param.detach(), 0)
-
-
 def run_worker(args: argparse.Namespace) -> None:
-    env = prepare_env(args)
-    os.environ.update(env)
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    rank = int(os.environ.get("RANK", "0"))
-    if rank == 0 and "LOCAL_RANK" not in os.environ:
-        log_path = Path(env["RUN_DIR"]) / "console.log"
-        log_handle = log_path.open("a", encoding="utf-8")
-        tee = Tee(sys.__stdout__, log_handle)
-        sys.stdout = tee
-        sys.stderr = tee
-    if "LOCAL_RANK" not in os.environ:
-        print("=" * 80)
-        print(f"run: {args.name}")
-        print(f"orth: {args.orth}")
-        print(f"train_token_budget: {args.train_token_budget}")
-        print(f"train_steps: {env['TRAIN_STEPS']}")
-        print(f"grad_accum: {args.train_grad_accum_steps}")
-        print(f"eval_every_tokens: {args.eval_every_tokens}")
-        print(f"eval_tokens: {args.eval_tokens}")
-        print(f"device: cuda:{local_rank}")
-        print(f"world_size: {os.environ.get('WORLD_SIZE', '1')}")
-        print("=" * 80)
+    runs_root = Path(args.runs_root).expanduser() if args.runs_root else ROOT / "runs"
+    if not runs_root.is_absolute():
+        runs_root = ROOT / runs_root
+    run_dir = (runs_root / args.name).resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    dist_ctx = setup_distributed_from_env()
+    os.environ["ORTH"] = args.orth
+    os.environ["LR_MUL"] = str(args.lr_mul)
+    os.environ["BASE_LR"] = "0.008" if args.orth == "adamw" else "0.023"
+    os.environ["SEED"] = str(args.seed)
+    os.environ["TRAIN_TOKEN_BUDGET"] = str(args.train_token_budget)
+    os.environ["TRAIN_STEPS"] = str(compute_train_steps(args.train_token_budget))
+    os.environ["TRAIN_GRAD_ACCUM_STEPS"] = str(args.train_grad_accum_steps)
+    os.environ["TRAIN_SEQ_LEN"] = str(FIXED_SEQ_LEN)
+    os.environ["EVAL_EVERY_TOKENS"] = str(args.eval_every_tokens)
+    os.environ["EVAL_TOKENS"] = str(args.eval_tokens)
+    os.environ["EVAL_BATCH_SIZE"] = str(args.eval_batch_size)
+    os.environ["EVAL_AT_START"] = "1" if args.eval_at_start else "0"
+    os.environ["LOG_EVERY_STEPS"] = str(args.log_every_steps)
+    os.environ["EXTENSION_STEPS"] = "0"
+    os.environ["VAL_LOSS_EVERY_STEPS"] = "0"
+    os.environ["WANDB"] = "1" if args.wandb == "on" else "0"
+    os.environ["WANDB_PROJECT"] = args.wandb_project
+    os.environ["WANDB_NAME"] = args.name
+    os.environ.pop("WANDB_GROUP", None)
+    os.environ["RUNS_ROOT"] = str(runs_root)
+    os.environ["RUN_DIR"] = str(run_dir)
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(ROOT / ".torchinductor"))
+    if args.wandb_entity:
+        os.environ["WANDB_ENTITY"] = args.wandb_entity
+    if args.wandb_mode:
+        os.environ["WANDB_MODE"] = args.wandb_mode
+    elif args.wandb == "on" and not os.environ.get("WANDB_API_KEY") and not Path.home().joinpath(".netrc").exists():
+        os.environ["WANDB_MODE"] = "offline"
+    if args.data_path:
+        os.environ["DATA_PATH"] = args.data_path
+    if args.orth == "manual":
+        os.environ["FAST_STEPS"] = str(args.fast_steps)
+        os.environ["STABLE_STEPS"] = str(args.stable_steps)
+    elif args.orth == "polar_express":
+        os.environ["PE_LOWER_BOUND"] = str(args.pe_lower_bound)
+        os.environ["PE_CUSHION"] = str(args.pe_cushion)
+        os.environ["PE_SAFETY_FACTOR"] = str(args.pe_safety_factor)
+    if args.model_max_seq_len > 0:
+        os.environ["MODEL_MAX_SEQ_LEN"] = str(args.model_max_seq_len)
+    os.environ["SPECTRAL_EVERY_TOKENS"] = str(args.spectral_every_tokens)
+    os.environ["SPECTRAL_MAX_MATRICES"] = str(args.spectral_max_matrices)
+    os.environ["SPECTRAL_MAX_DIM"] = str(args.spectral_max_dim)
+
+    grad_accum_steps = args.train_grad_accum_steps
+    train_steps = compute_train_steps(args.train_token_budget)
+
+    print("=" * 80)
+    print(f"run: {args.name}")
+    print(f"orth: {args.orth}")
+    print(f"train_token_budget: {args.train_token_budget}")
+    print(f"train_steps: {train_steps}")
+    print(f"grad_accum: {grad_accum_steps}")
+    print(f"eval_every_tokens: {args.eval_every_tokens}")
+    print(f"eval_tokens: {args.eval_tokens}")
+    print(f"device: cuda:0")
+    print("=" * 80)
+
+    device, _ = setup_device(base_seed=args.seed)
     logger = None
 
     try:
@@ -341,39 +219,32 @@ def run_worker(args: argparse.Namespace) -> None:
         )
 
         hparams = Hyperparameters()
-        world_batch_divisor = dist_ctx.grad_accum_steps * dist_ctx.world_size
-        hparams.val_batch_size = int(
-            float(os.environ.get("EVAL_BATCH_SIZE", world_batch_divisor * 2048))
-        )
+        hparams.val_batch_size = args.eval_batch_size
 
         training_stages = default_training_stages()
         training_schedule = TrainingSchedule(
             training_stages,
             hparams.num_scheduled_iterations,
             hparams.num_extension_iterations,
-            device=dist_ctx.device,
+            device=device,
         )
 
         setup_model_runtime(
             args_value=hparams,
-            world_size_value=dist_ctx.world_size,
-            grad_accum_steps_value=dist_ctx.grad_accum_steps,
-            grad_scale_value=dist_ctx.grad_scale,
-            device_value=dist_ctx.device,
+            grad_accum_steps_value=grad_accum_steps,
+            device_value=device,
         )
 
         logger = RunLogger(
-            master_process=dist_ctx.master_process,
             args=hparams,
             orth_config=orth_state.to_record(),
             orth_mode=orth_state.orth_mode,
             orth_schedule_name=orth_state.schedule_name,
             lr_mul=orth_state.lr_mul,
-            train_token_budget=int(float(os.environ.get("TRAIN_TOKEN_BUDGET", "0"))),
-            eval_every_tokens=int(float(os.environ.get("EVAL_EVERY_TOKENS", "0"))),
-            world_size=dist_ctx.world_size,
-            grad_accum_steps=dist_ctx.grad_accum_steps,
-            device=dist_ctx.device,
+            train_token_budget=args.train_token_budget,
+            eval_every_tokens=args.eval_every_tokens,
+            grad_accum_steps=grad_accum_steps,
+            device=device,
         )
 
         logger.print0("=" * 100)
@@ -384,20 +255,17 @@ def run_worker(args: argparse.Namespace) -> None:
         logger.print0(nvidia_smi_output())
         logger.print0("=" * 100)
 
-        model = build_model(hparams, training_stages, dist_ctx.device, world_batch_divisor)
-        broadcast_model(model)
+        model = build_model(hparams, training_stages, device)
 
         training_manager = TrainingManager(
             model,
-            rank=dist_ctx.rank,
-            world_size=dist_ctx.world_size,
-            grad_accum_steps=dist_ctx.grad_accum_steps,
-            device=dist_ctx.device,
+            device=device,
             args=hparams,
             training_schedule=training_schedule,
             lr_mul=orth_state.lr_mul,
             orth_mode=orth_state.orth_mode,
             polar_express=polar_express,
+            grad_accum_steps=grad_accum_steps,
         )
         loop_config = LoopConfig.from_env(
             orth_mode=orth_state.orth_mode,
@@ -412,19 +280,14 @@ def run_worker(args: argparse.Namespace) -> None:
             args=hparams,
             training_stages=training_stages,
             training_schedule=training_schedule,
-            dist_ctx=dist_ctx,
+            grad_accum_steps=grad_accum_steps,
             logger=logger,
             loop_config=loop_config,
         )
     finally:
         if logger is not None:
             logger.close()
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
-    parsed_args = parse_args()
-    if parsed_args.nproc_per_node > 1 and "LOCAL_RANK" not in os.environ:
-        raise SystemExit(launch_torchrun(parsed_args))
-    run_worker(parsed_args)
+    run_worker(parse_args())
