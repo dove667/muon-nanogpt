@@ -2,7 +2,7 @@
 
 南方科技大学 (SUSTech) 人工智能数学基础课程项目。
 
-研究 Muon 优化器中 Newton-Schulz 正交化系数调度对 GPT 预训练的影响。当前实验对比五种固定配置：`adamw`、`vanilla`、`manual`、`fast`、`polar_express`，并在统一的 fixed-stack（固定 batch/seq_len/window，较密验证，warmup+cosine LR）下比较验证损失、计算开销和更新矩阵的正交性。
+研究 Muon 优化器中 Newton-Schulz 正交化系数调度对 GPT 预训练的影响。当前实验对比五种固定配置：`adamw`、`vanilla`、`manual`、`fast`、`polar_express`，并在统一的 fixed-stack 下比较验证损失、计算开销和更新矩阵的正交性。
 
 ## 系统环境
 

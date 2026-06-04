@@ -72,24 +72,16 @@ def dispatch_orth_config(orth: str) -> tuple[OrthogonalizerConfig, object, float
 
 
 def build_model(device: torch.device) -> nn.Module:
-    model_max_seq_len = TRAINING.seq_len * TRAINING.grad_accum_steps
+    model_max_seq_len = TRAINING.seq_len
     model = GPT(
-        vocab_size=50257,
-        num_layers=11,
-        num_heads=6,
-        head_dim=128,
-        model_dim=768,
+        vocab_size=int(MODEL.vocab_size),
+        num_layers=int(MODEL.num_layers),
+        num_heads=int(MODEL.num_heads),
+        head_dim=int(MODEL.head_dim),
+        model_dim=int(MODEL.model_dim),
         max_seq_len=model_max_seq_len,
-        device=device,
-    ).to(device=device)
-    for module in model.modules():
-        if isinstance(module, (nn.Embedding, nn.Linear)):
-            module.weight.data = module.weight.data.bfloat16()
-    model.attn_gate_bank.data = model.attn_gate_bank.data.bfloat16()
-    model.ve_gate_bank.data = model.ve_gate_bank.data.bfloat16()
-    model.qk_bank.data = model.qk_bank.data.bfloat16()
-    model.vo_bank.data = model.vo_bank.data.bfloat16()
-    model.mlp_bank.data = model.mlp_bank.data.bfloat16()
+        mlp_ratio=int(MODEL.mlp_ratio),
+    ).to(device=device, dtype=torch.bfloat16)
     return model
 
 
@@ -143,7 +135,6 @@ def main() -> None:
         train_files=train_files,
         val_files=val_files,
         val_tokens=TRAINING.eval_tokens,
-        bigram_vocab_size=MODEL.bigram_vocab_size,
         train_steps=train_steps,
         grad_accum_steps=TRAINING.grad_accum_steps,
         logger=logger,

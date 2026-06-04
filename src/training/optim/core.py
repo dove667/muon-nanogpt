@@ -4,14 +4,6 @@ import torch
 from torch import Tensor, nn
 
 
-def _transpose_copy(src: Tensor, dst: Tensor) -> None:
-    dst.copy_(src.T)
-
-
-def _transpose_add(src: Tensor, dst: Tensor) -> None:
-    dst.add_(src.T)
-
-
 @dataclass(slots=True)
 class ParamConfig:
     label: str
@@ -27,7 +19,6 @@ class ParamConfig:
     chunk_size: int | None = None
     momentum: float | None = None
     beta2: float | None = None
-    per_matrix_lr_mul: list[float] | None = None
 
 
 class NorMuonAndAdam:
@@ -60,13 +51,9 @@ class NorMuonAndAdam:
 
         present = self._param_by_label.keys()
         assert set(scatter_order) == present and set(work_order) == present
-
         self._init_state()
 
-        self._lm_head_param = self._param_by_label.get("lm_head")
-        self._embed_param = self._param_by_label.get("embed")
-
-    def _build_param_cfg(self, param: nn.Parameter, label: str):
+    def _build_param_cfg(self, param: nn.Parameter, label: str) -> None:
         table_entry = self.param_table[label]
         optim = table_entry["optim"]
         adam_betas = table_entry.get("adam_betas")
@@ -87,25 +74,16 @@ class NorMuonAndAdam:
             )
         elif optim == "normuon":
             reshape = getattr(param, "reshape", None)
-            if reshape is None:
-                raise ValueError(f"NorMuon param {label} must have .reshape attribute")
-
+            if not isinstance(reshape, tuple):
+                reshape = (1, *param.shape) if param.ndim == 2 else tuple(param.shape)
             chunk_size = reshape[0]
             chunk_shape = (chunk_size, *reshape[1:])
             shape_mult = max(1.0, chunk_shape[-2] / chunk_shape[-1]) ** 0.5 if len(chunk_shape) >= 2 else 1.0
-            lr_mul = shape_mult * lr_mul
-
-            per_matrix_lr_mul = None
-            if label == "mlp_bank":
-                per_matrix_lr_mul = []
-                for idx in range(chunk_size):
-                    per_matrix_lr_mul.append(2.0 if idx % 2 == 1 else 1.0)
-
             param_cfg = ParamConfig(
                 label=label,
                 optim=optim,
                 adam_betas=tuple(adam_betas) if adam_betas else None,
-                lr_mul=lr_mul,
+                lr_mul=shape_mult * lr_mul,
                 wd_mul=wd_mul,
                 lr=self.normuon_defaults["lr"],
                 initial_lr=self.normuon_defaults["lr"],
@@ -114,14 +92,13 @@ class NorMuonAndAdam:
                 chunk_size=chunk_size,
                 momentum=self.normuon_defaults["momentum"],
                 beta2=self.normuon_defaults["beta2"],
-                per_matrix_lr_mul=per_matrix_lr_mul,
             )
         else:
             raise ValueError(f"Unknown optim type: {optim}")
 
         self.param_cfgs[param] = param_cfg
 
-    def _init_state(self):
+    def _init_state(self) -> None:
         for param, param_cfg in self.param_cfgs.items():
             if param_cfg.optim == "adam":
                 exp_avg = torch.zeros_like(param, dtype=torch.float32, device=param.device)
@@ -140,7 +117,7 @@ class NorMuonAndAdam:
                 second_momentum_buffer=second_momentum_buffer,
             )
 
-    def reset(self):
+    def reset(self) -> None:
         for param, param_cfg in self.param_cfgs.items():
             if param_cfg.optim != "normuon":
                 continue
@@ -172,19 +149,12 @@ class NorMuonAndAdam:
 
     @torch.no_grad()
     def step(self, do_adam: bool = True):
-        lm_param, embed_param = self._lm_head_param, self._embed_param
-
         for label in self.scatter_order:
             param = self._param_by_label[label]
             param_cfg = self.param_cfgs[param]
             if param_cfg.optim == "adam" and not do_adam:
                 continue
             if param.grad is None:
-                continue
-            if label == "lm_head" and do_adam:
-                if embed_param is not None and embed_param.grad is not None:
-                    _transpose_add(embed_param.grad, param.grad)
-            if label == "embed":
                 continue
 
             grad = param.grad
@@ -196,15 +166,12 @@ class NorMuonAndAdam:
             else:
                 self._normuon_update(param, grad, param_cfg)
 
-        if do_adam and embed_param is not None and lm_param is not None:
-            _transpose_copy(lm_param.data, embed_param.data)
-
         for param, param_cfg in self.param_cfgs.items():
             if param_cfg.optim == "adam" and not do_adam:
                 continue
             param.grad = None
 
-    def _adam_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig):
+    def _adam_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig) -> None:
         beta1, beta2 = param_cfg.adam_betas
         lr = param_cfg.lr * param_cfg.lr_mul
 
@@ -225,21 +192,18 @@ class NorMuonAndAdam:
         update.addcmul_(param, mask, value=eff_wd)
         param.add_(other=update, alpha=-1.0)
 
-    def _normuon_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig):
+    def _normuon_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig) -> None:
         state = self.param_states[param]
         grad_chunk = grad_chunk.float()
 
-        momentum_val = param_cfg.momentum
         eff_lr = param_cfg.lr_mul * param_cfg.lr
         eff_wd = param_cfg.wd_mul * param_cfg.weight_decay * param_cfg.lr
-
-        is_large_matrix = grad_chunk.shape[-2] > 1024
-        momentum_t = torch.tensor(momentum_val, dtype=torch.float32, device="cpu")
+        momentum_t = torch.tensor(param_cfg.momentum, dtype=torch.float32, device="cpu")
         value_chunk = self.orthogonalize_fn(
             grad_chunk,
             state["momentum_buffer"],
             momentum_t,
-            split_baddbmm=is_large_matrix,
+            split_baddbmm=grad_chunk.shape[-2] > 1024,
         )
 
         red_dim = -1 if grad_chunk.shape[-2] >= grad_chunk.shape[-1] else -2
@@ -249,15 +213,7 @@ class NorMuonAndAdam:
             param_cfg.beta2,
             red_dim,
         )
-
-        param_view = param.data.view(param_cfg.reshape)
-
-        if param_cfg.per_matrix_lr_mul is not None:
-            for mat_idx in range(param_cfg.chunk_size):
-                individual_lr = eff_lr * param_cfg.per_matrix_lr_mul[mat_idx]
-                _cautious_wd_update(param_view[mat_idx], value_chunk[mat_idx], eff_wd, individual_lr)
-        else:
-            _cautious_wd_update(param_view, value_chunk, eff_wd, eff_lr)
+        _cautious_wd_update(param.data.view(param_cfg.reshape), value_chunk, eff_wd, eff_lr)
 
     @staticmethod
     def _apply_normuon_variance_reduction(value_chunk, second_momentum_buffer, beta2, red_dim):

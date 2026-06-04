@@ -1,58 +1,56 @@
 # 项目状态
 
-## 当前阶段：fixed T=5 对照实验，代码已彻底化简
+## 当前阶段：fixed T=5 对照实验，训练栈已改成干净可解释版本
 
-- 实验编排：5 配置 × 3 seeds = 15 runs，单一 flat 布局
-- CLI 只保留必要参数（`--data-path` `--orth` `--seed` `--name`），其余全部集中到 `config.yaml`
-- 单卡 RTX 4090 跑 162M 模型无压力
+- 实验编排固定为 5 配置 × 3 seeds = 15 runs
+- 训练入口保持两层：
+  - `src/training/train.py`：单次训练
+  - `src/experiment_plan.py`：批量跑 15 个 run
+- 所有固定超参数集中在 `config.yaml`
 
 ## 已完成
 
-### 代码化简（本轮最大改动）
-- 删除全部分布式训练代码（`DistributedContext`, `torch.distributed`, `sparse_comms.py`, sharding, all-reduce, `broadcast_model`）
-- 删除 W&B（`wandb` 初始化/日志/关闭、`--wandb*` CLI 参数、`pyproject.toml` 依赖项）
-- 删除 `Hyperparameters` dataclass，所有参数直接传递
-- 删除 `LoopConfig`，循环参数直接传给 `run_training_loop`
-- 删除 `TrainingStage` / `TrainingSchedule` / `default_training_stages()`
-- 删除 `schedule.py`，`compute_lr` 内联到 `manager.py`，`resolve_data_files` 移到 `utils.py`
-- `RunLogger` → `Logger`，去掉公共字段注入，config.json 只记实验标识
+- 模型已从竞速版参数银行重构为标准 per-layer prenorm Transformer：
+  - 标准 `nn.Linear` attention / MLP
+  - 标准 RoPE
+  - tied embedding + lm_head
+  - 标准 cross-entropy
+- 删除会干扰研究解释的竞速 trick：
+  - 删除 `qk_bank / vo_bank / mlp_bank`
+  - 删除 softcapped logits
+  - 删除 ReLU-squared MLP
+  - 删除 QK norm
+  - 删除词表 padding 到 128 倍数
+  - 删除交错 Adam 更新，Adam 现在每步更新
+- 数据管线已改成朴素固定长度 block 采样：
+  - 输入来自 `fineweb_train_*.bin`
+  - 验证来自 `fineweb_val_*.bin`
+  - 不再做 BOS 对齐 packing 或变长 attention
+- 优化器结构已简化：
+  - Muon 只作用于标准 Transformer 的矩阵参数
+  - token embedding / tied lm_head / LayerNorm 等非矩阵参数走 Adam
+  - `adamw` 模式下全部参数都走 Adam
+- `manual` 默认已校正为实验设计要求的 `3 fast + 2 stable`
+- 批量实验计划已同步修正 run 命名，断点续跑仍然有效
+- README / runbook / experiments / dashboard 文案已同步到标准 Transformer + 单卡 + 固定长度 block 采样口径
+- 文档中的运行命令统一使用 `python`，不再写 `conda run -n AI`
 
-### 集中化配置
-- 新增 `config.yaml`（项目根），统一管理所有固定超参数：
-  - training：batch_tokens / seq_len / grad_accum / warmup+cosine LR / eval / spectral 参数
-  - model：bigram_vocab_size / block_size / window_sizes / mtp_weights
-  - optimizer：完整 param_table + Adam/Muon 默认值 + lr_mul + step_interval
-  - orthogonalization：NS 迭代步数 / polar_express 参数
-- `src/training/config/loader.py` 加载 YAML，`config/__init__.py` 统一导出 `TRAINING` `MODEL` `OPTIMIZER`
+## 为什么这样改
 
-### 目录重组
-```
-src/training/
-├── config/    # yaml 加载 + 导出
-├── data/      # Shard, data_generator
-├── optim/     # NorMuonAndAdam, TrainingManager
-├── orth/      # OrthogonalizerConfig, polar_express
-├── model.py
-├── metrics.py
-├── run_support.py   # Logger, 训练/验证循环, setup_device
-└── train.py         # 入口（CLI 仅 4 参数）
-```
+- 研究目标是比较 Muon 的 NS 系数调度，而不是比较竞速工程技巧
+- 标准 Transformer + 固定长度数据 + 每步更新更容易解释收敛差异
+- 删除分布式和竞速残留后，单卡 4090 上复现实验更直接
 
-### 训练栈
-- batch = `8 × 2048 × 8` = 131072 tokens/step
-- seq_len = 2048, grad_accum = 16, window = (3, 7) blocks
-- LR = 10% warmup + cosine decay 到峰值的 10%
-- Muon momentum = 0.95, Adam 每 2 步更新一次
-- 模型：11L 768D 6 头 head_dim=128，权重在 qk/vo/mlp bank 中
-- MTP 权重固定 [1.0, 0.0]，YaRN 逻辑保留但不随阶段切换
+## 固定训练栈
 
-### 分析流水线
-- `summarize_runs.py` → `run_summary.csv` + `orth_summary.csv`
-- `plot_curves.py` → 7 张对比图
-- `build_dashboard.py` → 轻量 HTML 报告
+- train token budget = 100M
+- eval every = 2M tokens
+- eval tokens = 524,288
+- batch_tokens = 131,072
+- seq_len = 2048
+- grad_accum_steps = 16
+- LR = 10% warmup + cosine decay 到峰值 10%
 
 ## 待确认
 
-- 固定栈窗口配置 `(3, 7)`、MTP 权重 `[1.0, 0.0]`
-- YaRN 逻辑未删除，只是不再随阶段切换
-- `5090_results/` 是历史存档，禁止修改
+- 若后续需要进一步减小混杂，可以再评估是否把 `grad_accum_steps=16` 下调

@@ -24,7 +24,7 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 
 | 参数 | 值 |
 |------|-----|
-| GPU | 4× RTX 4090（24GB VRAM） |
+| GPU | 1× RTX 4090（24GB VRAM） |
 | CUDA | 12.1 |
 | PyTorch | 2.5.1+cu121 |
 
@@ -32,8 +32,8 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 
 | 参数 | 值 |
 |------|-----|
-| 模型 | 11 层 GPT，hidden_dim=768，6 heads（head_dim=128），~162M 参数 |
-| 数据 | FineWeb-10B（预分词、BOS 对齐分片） |
+| 模型 | 11 层标准 prenorm Transformer，hidden_dim=768，6 heads（head_dim=128），MLP ratio=4 |
+| 数据 | FineWeb-10B（预分词 token 分片，固定长度 block 采样） |
 | 训练 token 预算 | **100M** |
 | 验证间隔 | 每 2M tokens |
 | 验证 token 数 | 524,288 |
@@ -42,7 +42,8 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 | 批次大小 | 固定，每步约 131K tokens（如 8×2048×8） |
 | 梯度累积 | 16 步 |
 | 随机种子 | $\{0, 1, 2\}$ |
-| 注意力窗口 | 固定 short=3×128, long=7×128（取现有第二阶段配置） |
+| 位置编码 | 标准 RoPE |
+| 注意力 | 标准 causal self-attention（不做 QK norm、softcap 或变长 attention 包装） |
 | LR 调度 | warmup（前 10% 步线性升至峰值）→ cosine decay 至峰值 10% |
 
 ### Muon 四组（Vanilla / Manual / Fast / PE）
@@ -65,7 +66,7 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 
 | 参数 | 值 |
 |------|-----|
-| 学习率 | 0.008（与现有代码中 Adam 参数 LR 一致） |
+| 学习率 | 0.008 |
 | $\beta_1$, $\beta_2$ | (0.9, 0.95) |
 | weight decay | 0.005 |
 
@@ -95,11 +96,9 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 
 ## 六、实现说明
 
-需要新增 `adamw` 和 `vanilla` 两种 orth 模式（现有代码中 "vanilla" 实际是 Fast），改动点：
+当前实现已经对齐这份实验设计，并额外去掉了会干扰解释的竞速遗留：
 
-1. **`orthogonalization.py`**：
-   - 重命名现有 `"vanilla"` 分支为 `"fast"`
-   - 新增 `"vanilla"` 分支（5 步全用 `STABLE_COEFF`）
-   - 新增 `"adamw"` 分支
-2. **`polar.py`**：`adamw` 模式返回恒等映射
-3. **`optim/manager.py`**：`adamw` 模式下将矩阵参数改用 Adam 优化
+1. 模型已改为标准 per-layer prenorm Transformer，不再使用参数银行
+2. 输出头和损失已改为 tied embedding + 标准 cross-entropy，不再使用 softcap logits
+3. 数据已改为固定长度连续 block 采样，不再使用 BOS 对齐 packing
+4. Adam 参数现在每步更新，不再使用交错 step trick

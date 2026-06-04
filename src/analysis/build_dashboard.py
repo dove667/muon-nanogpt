@@ -201,20 +201,21 @@ def build_html(run_rows: list[dict[str, str]], orth_rows: list[dict[str, str]], 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Muon Fixed-T5 Report</title>
+  <title>Muon Schedule Study Report</title>
   <style>{CSS}</style>
 </head>
 <body>
   <header>
-    <h1>Muon Fixed-T5 实验报告</h1>
+    <h1>Muon Schedule Study 实验报告</h1>
     <p>当前报告只针对新的固定实验设置：AdamW、Vanilla、Manual、Fast、Polar Express，各 3 个 seeds，总计 15 runs。</p>
   </header>
   <main>
     <section class="panel">
       <h2>实验设置</h2>
       <ul>
-        <li>固定训练栈：100M train tokens，10M eval interval，2,097,152 eval tokens。</li>
-        <li>固定 batch / seq / window：约 262K tokens/step，seq_len=2048，window=(3, 7)。</li>
+        <li>固定训练栈：100M train tokens，2M eval interval，524,288 eval tokens。</li>
+        <li>固定 batch / seq：131,072 tokens/step，seq_len=2048，grad_accum=16。</li>
+        <li>模型是标准 prenorm Transformer + RoPE；不使用 BOS packing、softcap logits 或交错 Adam 更新。</li>
         <li>Muon 组固定 T=5；AdamW 作为无正交化基线。</li>
       </ul>
     </section>

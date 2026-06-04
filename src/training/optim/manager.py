@@ -5,7 +5,7 @@ import torch
 
 from model import ForwardScheduleConfig
 from optim.core import NorMuonAndAdam
-from config import TRAINING, MODEL, OPTIMIZER
+from config import TRAINING, OPTIMIZER
 
 
 def _compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
@@ -23,21 +23,22 @@ def _compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
     return lr_mul * decay
 
 
-def _build_param_table():
-    raw = dict(OPTIMIZER.param_table.items())
-    result = {}
-    for label, cfg in raw.items():
-        entry = {"optim": cfg["optim"]}
-        if "adam_betas" in cfg:
-            entry["adam_betas"] = list(cfg["adam_betas"])
+def _is_matrix_param(name: str, param: torch.nn.Parameter) -> bool:
+    return param.ndim >= 2 and "token_embed" not in name and "lm_head" not in name
+
+
+def _build_param_table(model, orth_mode: str) -> dict[str, dict]:
+    table: dict[str, dict] = {}
+    for name, param in model.named_parameters():
+        label = getattr(param, "label", name.replace(".weight", ""))
+        if _is_matrix_param(name, param) and orth_mode != "adamw":
+            table[label] = {"optim": "normuon"}
         else:
-            entry["adam_betas"] = None
-        if "lr_mul" in cfg:
-            entry["lr_mul"] = float(cfg["lr_mul"])
-        if "wd_mul" in cfg:
-            entry["wd_mul"] = float(cfg["wd_mul"])
-        result[label] = entry
-    return result
+            table[label] = {
+                "optim": "adam",
+                "adam_betas": [float(OPTIMIZER.adam_beta1), float(OPTIMIZER.adam_beta2)],
+            }
+    return table
 
 
 class TrainingManager:
@@ -46,22 +47,12 @@ class TrainingManager:
         self.device = device
         self.orth_mode = orth_mode
         self.total_steps = total_steps
-        self.block_size = MODEL.block_size
         self.global_train_tokens = 0
         self.grad_accum_steps = grad_accum_steps
         self.train_loader_send_args = None
 
-        self.param_table = _build_param_table()
-        if self.orth_mode == "adamw":
-            for label in ("qk_bank", "vo_bank", "mlp_bank"):
-                self.param_table[label] = {"optim": "adam", "adam_betas": [0.9, 0.95]}
-
-        self.work_order = [
-            "scalars", "smear_gate", "skip_gate", "attn_gate_bank", "ve_gate_bank",
-            "post_lambdas", "x0_lambdas", "bigram_lambdas", "resid_lambdas",
-            "value_embeds", "bigram_embed", "lm_head", "embed",
-            "qk_bank", "vo_bank", "mlp_bank",
-        ]
+        self.param_table = _build_param_table(model, orth_mode)
+        self.work_order = list(self.param_table)
 
         adam_cfg = OPTIMIZER.adam_defaults
         muon_cfg = OPTIMIZER.muon_defaults
@@ -85,36 +76,25 @@ class TrainingManager:
         self.reset()
 
     def get_forward_args(self):
-        return ForwardScheduleConfig(
-            mtp_weights=self.mtp_weights,
-            ws_short=self.ws_short * self.block_size,
-            ws_long=self.ws_long * self.block_size,
-            train_max_seq_len=self.train_max_seq_len,
-        )
+        return ForwardScheduleConfig(train_max_seq_len=self.train_max_seq_len)
 
     def step_optimizers(self, step: int):
         step_lr = _compute_lr(step, self.total_steps)
         muon_momentum = OPTIMIZER.muon_defaults.momentum
-        do_adam = self.orth_mode == "adamw" or step % OPTIMIZER.adam_step_interval == 1
 
         for _, param_cfg in self.optimizer.param_cfgs.items():
             param_cfg.lr = param_cfg.initial_lr * step_lr
             if param_cfg.optim == "normuon":
                 param_cfg.momentum = muon_momentum
 
-        self.optimizer.step(do_adam=do_adam)
+        self.optimizer.step(do_adam=True)
 
     def reset(self, state=None):
         if state is not None:
             self.optimizer.load_state_dict(state)
         self.optimizer.reset()
-
-        self.ws_short, self.ws_long = tuple(MODEL.window_sizes)
         self.batch_size = TRAINING.batch_tokens
         self.train_max_seq_len = TRAINING.seq_len
-        self.mtp_weights = torch.tensor(list(MODEL.mtp_weights))
-        self.model.yarn.reset()
-        self.model.yarn_paired_head.reset()
 
     def get_state(self):
         return copy.deepcopy(self.optimizer.state_dict())

@@ -47,6 +47,9 @@ class Logger:
             "seed": seed,
             "base_lr": base_lr,
             "train_token_budget": train_token_budget,
+            "batch_tokens": int(TRAINING.batch_tokens),
+            "seq_len": int(TRAINING.seq_len),
+            "grad_accum_steps": int(TRAINING.grad_accum_steps),
             **orth_config.to_record(),
         }
         self.config_file.write_text(json.dumps(run_config, indent=2, sort_keys=True), encoding="utf-8")
@@ -66,7 +69,6 @@ def run_validation(
     training_manager,
     val_files: str,
     val_tokens: int,
-    bigram_vocab_size: int,
     grad_accum_steps: int,
     logger: Logger,
     step: int,
@@ -74,21 +76,20 @@ def run_validation(
     training_time_ms: float,
     wall_start_time: float,
 ) -> None:
-    val_batch_size = grad_accum_steps * TRAINING.seq_len
+    val_batch_tokens = TRAINING.batch_tokens
     eval_start_time = time.perf_counter()
     model.eval()
-    assert val_tokens % val_batch_size == 0
-    val_steps = grad_accum_steps * val_tokens // val_batch_size
+    assert val_tokens % val_batch_tokens == 0
+    val_steps = grad_accum_steps * val_tokens // val_batch_tokens
     val_loader = data_generator(
-        val_files, val_batch_size, -1, grad_accum_steps,
-        False, bigram_vocab_size,
+        val_files, val_batch_tokens, TRAINING.seq_len, grad_accum_steps,
     )
     val_loss = torch.tensor(0.0, device=training_manager.device)
     with torch.no_grad():
         for _ in range(val_steps):
-            inputs, targets, cum_seqlens, bigram_inputs, _ = next(val_loader)
+            inputs, targets = next(val_loader)
             val_loss += model(
-                inputs, targets, cum_seqlens, bigram_inputs, training_manager.get_forward_args(),
+                inputs, targets, training_manager.get_forward_args(),
             ).mean()
     val_loss /= val_steps
     del val_loader
@@ -122,7 +123,6 @@ def run_training_loop(
     train_files: str,
     val_files: str,
     val_tokens: int,
-    bigram_vocab_size: int,
     train_steps: int,
     grad_accum_steps: int,
     logger: Logger,
@@ -135,8 +135,7 @@ def run_training_loop(
     orth_norm_factor: float,
 ) -> None:
     train_loader = data_generator(
-        train_files, TRAINING.batch_tokens, TRAINING.seq_len,
-        grad_accum_steps, True, bigram_vocab_size,
+        train_files, TRAINING.batch_tokens, TRAINING.seq_len, grad_accum_steps,
     )
     gc.collect()
 
@@ -164,7 +163,6 @@ def run_training_loop(
                 training_manager=training_manager,
                 val_files=val_files,
                 val_tokens=val_tokens,
-                bigram_vocab_size=bigram_vocab_size,
                 grad_accum_steps=grad_accum_steps,
                 logger=logger,
                 step=step,
@@ -191,11 +189,11 @@ def run_training_loop(
 
         grad_scale = 1.0 / grad_accum_steps
         for _ in range(grad_accum_steps):
-            inputs, targets, cum_seqlens, bigram_inputs, _bigram_cpu = train_loader.send(
+            inputs, targets = train_loader.send(
                 training_manager.train_loader_send_args
             )
             loss = model(
-                inputs, targets, cum_seqlens, bigram_inputs, training_manager.get_forward_args(),
+                inputs, targets, training_manager.get_forward_args(),
             ).sum() * grad_scale
             if should_log:
                 train_loss_accum += float(loss.detach())
@@ -274,7 +272,6 @@ def run_training_loop(
 
 def _primary_train_lr_float(training_manager) -> float:
     for param_cfg in training_manager.optimizer.param_cfgs.values():
-        if param_cfg.label not in {"qk_bank", "vo_bank", "mlp_bank"}:
-            continue
-        return float(param_cfg.lr * param_cfg.lr_mul)
+        if param_cfg.optim == "normuon":
+            return float(param_cfg.lr * param_cfg.lr_mul)
     return float("nan")

@@ -2,13 +2,24 @@
 
 ## 环境
 
-RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。162M 模型在单卡上完全够用，无分布式逻辑。
+RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没有分布式路径，训练栈默认就是单卡、标准 Transformer 和固定长度 block 采样。
 
 数据路径按实际位置设置，以下示例中用 `/data/fineweb10B` 代替。
 
 ## 配置
 
 所有固定超参数集中在项目根 `config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 3 个参数。
+
+当前固定训练栈：
+
+- 标准 11 层 prenorm Transformer，`model_dim=768`，`num_heads=6`，`head_dim=128`
+- `seq_len=2048`
+- `batch_tokens=131072`
+- `grad_accum_steps=16`
+- `train_token_budget=100M`
+- `eval_every_tokens=2M`
+- `eval_tokens=524288`
+- LR 为 10% warmup + cosine decay 到峰值 10%
 
 ## 1. 单次训练
 
@@ -101,6 +112,6 @@ python -m src.analysis.build_dashboard
 
 ## 注意
 
-- `5090_results/` 是历史存档，**禁止修改**
-- 数据格式：FineWeb-10B 预分词 BOS 对齐 shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
+- 数据格式：FineWeb-10B 预分词 token shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
+- 训练时使用固定长度 `seq_len=2048` 的朴素连续 block 采样，不再做 BOS packing 或变长 attention
 - 固定训练栈详见 `config.yaml`

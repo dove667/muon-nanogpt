@@ -23,9 +23,9 @@ class RunSpec:
         if self.orth == "fast":
             return f"fast_seed{self.seed}"
         if self.orth == "manual":
-            return f"manual_seed{self.seed}"
+            return f"manual_f3_s2_seed{self.seed}"
         if self.orth == "polar_express":
-            return f"polar_express_seed{self.seed}"
+            return f"polar_express_l1e-3_seed{self.seed}"
         raise SystemExit(f"Unknown orth={self.orth}")
 
 
