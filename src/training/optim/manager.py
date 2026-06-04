@@ -10,7 +10,7 @@ from optim.sparse_comms import sparse_comms_share_indexes, sparse_comms_start
 
 
 class TrainingManager:
-    def __init__(self, model, *, rank, world_size, grad_accum_steps, device, args, training_schedule, lr_mul, polar_express):
+    def __init__(self, model, *, rank, world_size, grad_accum_steps, device, args, training_schedule, lr_mul, orth_mode, polar_express):
         self.model = model
         self.rank = rank
         self.world_size = world_size
@@ -18,6 +18,7 @@ class TrainingManager:
         self.device = device
         self.args = args
         self.training_schedule = training_schedule
+        self.orth_mode = orth_mode
         self.block_size = 128
         self.global_train_tokens = 0
 
@@ -39,6 +40,9 @@ class TrainingManager:
             "value_embeds": {"optim": "adam", "comms": "sharded", "adam_betas": [0.75, 0.95], "lr_mul": 75.0, "wd_mul": 5.0},
             "embed": {"optim": "adam", "comms": "sharded", "adam_betas": [0.5, 0.95], "wd_mul": 150.0},
         }
+        if self.orth_mode == "adamw":
+            for label in ("qk_bank", "vo_bank", "mlp_bank"):
+                self.param_table[label] = {"optim": "adam", "comms": "sharded", "adam_betas": [0.9, 0.95]}
         self.work_order = [
             "scalars", "smear_gate", "skip_gate", "attn_gate_bank", "ve_gate_bank",
             "post_lambdas", "x0_lambdas", "bigram_lambdas", "resid_lambdas",
@@ -99,7 +103,7 @@ class TrainingManager:
     def step_optimizers(self, step: int):
         step_lr = self.training_schedule.get_lr(step)
         muon_momentum = get_muon_momentum(step, self.training_schedule.total_steps)
-        do_adam = step % 2 == 1
+        do_adam = self.orth_mode == "adamw" or step % 2 == 1
 
         for _, param_cfg in self.optimizer.param_cfgs.items():
             param_cfg.lr = param_cfg.initial_lr * step_lr
@@ -107,7 +111,7 @@ class TrainingManager:
                 param_cfg.momentum = muon_momentum
 
         self.optimizer.step(do_adam=do_adam)
-        if step == self.split_step:
+        if self.split_step is not None and step == self.split_step:
             self.optimizer.copy_lm_state_to_embed()
 
     def reset(self, state=None):

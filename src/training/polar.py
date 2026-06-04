@@ -33,6 +33,9 @@ def make_polar_express(
         momentum_buffer.lerp_(grad_chunk, 1 - momentum)
         g = grad_chunk.lerp_(momentum_buffer, momentum)
 
+        if not coeffs:
+            return g.bfloat16()
+
         x = g.bfloat16()
         is_tall = g.size(-2) > g.size(-1)
         x = x / (x.norm(dim=(-2, -1), keepdim=True) * norm_factor + 1e-6)

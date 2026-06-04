@@ -141,11 +141,11 @@ class RunLogger:
             "run_name": self.run_name,
             "wandb_group": self.wandb_group,
             "wandb_project": self.wandb_project,
-            "base_lr": 0.023,
-            "actual_lr": 0.023 * lr_mul,
+            "base_lr": float(os.environ.get("BASE_LR", "0.023")),
+            "actual_lr": float(os.environ.get("BASE_LR", "0.023")) * lr_mul,
             "seed": int(os.environ.get("SEED", "0")),
             "model_size": "train_gpt_11L_768D",
-            "seq_len": "scheduled_896_2048",
+            "seq_len": int(os.environ.get("TRAIN_SEQ_LEN", "2048")),
             "grad_accum": grad_accum_steps,
             "world_size": world_size,
             "train_token_budget": train_token_budget,
@@ -403,7 +403,7 @@ def run_training_loop(
             logger.log_metric(
                 {
                     "train/loss_raw": float(train_loss_accum),
-                    "train/lr": float(_normuon_lr_float(training_manager)),
+                    "train/lr": float(_primary_train_lr_float(training_manager)),
                     "train/tokens": int(training_manager.global_train_tokens),
                     "train/step": int(step + 1),
                     "train/throughput_tokens_per_sec": float(step_tokens / step_wall_s),
@@ -450,8 +450,9 @@ def run_training_loop(
     )
 
 
-def _normuon_lr_float(training_manager) -> float:
+def _primary_train_lr_float(training_manager) -> float:
     for param_cfg in training_manager.optimizer.param_cfgs.values():
-        if param_cfg.optim == "normuon":
-            return float(param_cfg.lr)
+        if param_cfg.label not in {"qk_bank", "vo_bank", "mlp_bank"}:
+            continue
+        return float(param_cfg.lr * param_cfg.lr_mul)
     return float("nan")

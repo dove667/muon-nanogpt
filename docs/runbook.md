@@ -22,35 +22,35 @@ python -m src.run_training \
   --wandb off
 ```
 
-使用 Manual 或 Polar Express 策略时加上对应的正交化参数：
+使用 Manual、Fast、AdamW 或 Polar Express 时可这样切换：
 
 ```bash
 # Manual：5 步中前 3 步快速、后 2 步稳定
 python -m src.run_training --orth manual --ns-t 5 --fast-steps 3 --stable-steps 2 ...
 
-# Polar Express：9 步，奇异值下界 3e-5
-python -m src.run_training --orth polar_express --pe-t 9 --pe-lower-bound 3e-5 ...
+# Fast：5 步全 fast 系数
+python -m src.run_training --orth fast ...
+
+# AdamW baseline：矩阵参数不做 Muon 正交化
+python -m src.run_training --orth adamw ...
+
+# Polar Express：T=5，奇异值下界 1e-3
+python -m src.run_training --orth polar_express --pe-t 5 --pe-lower-bound 1e-3 ...
 ```
 
-## 运行实验阶段
+## 运行完整实验计划
 
-实验计划详见 [`docs/experiments.md`](experiments.md)。以下三个命令覆盖全部阶段：
+实验计划详见 [`docs/experiments.md`](experiments.md)。当前项目已经化简为单一固定实验入口：
 
 ```bash
-# 阶段 1+2+3：粗筛网格（默认 30M token/轮，共约 75 轮）
-python -m src.experiment_plan core75 --data-path /data/fineweb10B
-
-# 阶段 4：Polar Express 扩展搜索
-python -m src.experiment_plan pe_expand --data-path /data/fineweb10B
-
-# 阶段 5：从网格结果中选最优配置，做 100M 主赛 → 300M 决赛
-python -m src.experiment_plan main_final --data-path /data/fineweb10B
+# 5 配置 × 3 seeds = 15 runs
+python -m src.experiment_plan --data-path /data/fineweb10B
 ```
 
 跳过已完成轮次（断点续跑）：
 
 ```bash
-python -m src.experiment_plan core75 --data-path /data/fineweb10B --skip-completed-runs
+python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
 ```
 
 ## 生成分析报告
@@ -72,12 +72,12 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--orth` | `vanilla` | 正交化策略：`vanilla` / `manual` / `polar_express` |
-| `--lr-mul` | `1.0` | 学习率倍率（基础 LR 为 0.023） |
+| `--orth` | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
+| `--lr-mul` | `1.0` | 学习率倍率（Muon 组基础 LR 为 0.023，AdamW 组基础 LR 为 0.008） |
 | `--seed` | `0` | 随机种子 |
-| `--train-token-budget` | `30000000` | 训练 token 预算 |
-| `--eval-every-tokens` | `5000000` | 验证间隔（token 数） |
-| `--eval-tokens` | `1048576` | 每次验证的 token 数 |
+| `--train-token-budget` | `100000000` | 训练 token 预算 |
+| `--eval-every-tokens` | `10000000` | 验证间隔（token 数） |
+| `--eval-tokens` | `2097152` | 每次验证的 token 数 |
 | `--data-path` | — | 数据集根目录（必填，无默认值） |
 | `--wandb` | `on` | W&B 日志开关：`on` / `off` |
 
@@ -115,4 +115,4 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 - `train.py` 在 `torchrun` 内部运行，使用相对导入（如 `import polar`），**不要改为包导入**。
 - 首次运行会编译模型和预热 CUDA 内核（约 7 分钟），后续运行复用 `.torchinductor/` 缓存。
 - `5090_results/` 是之前硬件的存档输出，**请勿修改**。
-- `grad_accum_steps` 默认按 `8 // world_size` 计算，4 GPU 时自动设为 2，确保每 GPU 的 batch 大小一致。无需手动指定。
+- 固定实验栈默认使用 `seq_len=2048`、`batch=16*2048*8`、`window=(3,7)` 与 warmup+cosine LR。

@@ -31,7 +31,7 @@ def build_model(
             "MODEL_MAX_SEQ_LEN",
             max(
                 args.val_batch_size // world_batch_divisor,
-                max(stage.batch_size for stage in training_stages) // world_batch_divisor,
+                max(stage.train_max_seq_len for stage in training_stages),
             ),
         )
     )
@@ -83,7 +83,6 @@ def main() -> None:
             args.num_scheduled_iterations,
             args.num_extension_iterations,
             device=dist_ctx.device,
-            cooldown_frac=0.60,
         )
 
         setup_model_runtime(
@@ -129,6 +128,7 @@ def main() -> None:
             args=args,
             training_schedule=training_schedule,
             lr_mul=orth_state.lr_mul,
+            orth_mode=orth_state.orth_mode,
             polar_express=polar_express,
         )
         loop_config = LoopConfig.from_env(

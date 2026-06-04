@@ -1,52 +1,42 @@
 
 import argparse
+import math
 import os
 import subprocess
 from pathlib import Path
 
 from src.utils import ROOT, TRAINING_ROOT as DEFAULT_TRAINING_ROOT, RUNS_ROOT as DEFAULT_RUNS_ROOT
 
+FIXED_BATCH_TOKENS = 16 * 2048 * 8
+FIXED_SEQ_LEN = 2048
+
 
 def compute_train_steps(train_token_budget: int) -> int:
-    batches = [8 * 2048 * 8, 16 * 2048 * 8, 24 * 2048 * 8]
-
-    def tokens_for_steps(n: int) -> int:
-        e1 = round(n / 3)
-        e2 = round(2 * n / 3)
-        s1 = max(e1, 0)
-        s2 = max(e2 - e1, 0)
-        s3 = max(n - e2, 0)
-        return s1 * batches[0] + s2 * batches[1] + s3 * batches[2]
-
-    lo, hi = 0, 1
-    while tokens_for_steps(hi) < train_token_budget:
-        hi *= 2
-    while lo + 1 < hi:
-        mid = (lo + hi) // 2
-        if tokens_for_steps(mid) >= train_token_budget:
-            hi = mid
-        else:
-            lo = mid
-    return hi
+    return math.ceil(train_token_budget / FIXED_BATCH_TOKENS)
 
 
 def default_group(orth: str) -> str:
-    return "vanilla_muon" if orth == "vanilla" else "manual"
+    del orth
+    return "fixed_t5"
 
 
 def default_run_name(args: argparse.Namespace) -> str:
+    if args.orth == "adamw":
+        return f"adamw_seed{args.seed}"
     if args.orth == "vanilla":
-        return f"old_fast5_lr{args.lr_mul}_seed{args.seed}"
+        return f"vanilla_seed{args.seed}"
+    if args.orth == "fast":
+        return f"fast_seed{args.seed}"
     if args.orth == "manual":
-        return f"p2_T{args.ns_t}_f{args.fast_steps}_s{args.stable_steps}_lr{args.lr_mul}_seed{args.seed}"
+        return f"manual_T{args.ns_t}_f{args.fast_steps}_s{args.stable_steps}_seed{args.seed}"
     if args.orth == "polar_express":
-        return f"pe_T{args.pe_t}_l{args.pe_lower_bound}_lr{args.lr_mul}_seed{args.seed}"
+        return f"polar_express_T{args.pe_t}_l{args.pe_lower_bound}_seed{args.seed}"
     raise SystemExit(f"Unknown orth={args.orth}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch one configured training run.")
-    parser.add_argument("--orth", choices=["vanilla", "manual", "polar_express"], default=os.environ.get("ORTH", "vanilla"))
+    parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"], default=os.environ.get("ORTH", "fast"))
     parser.add_argument("--lr-mul", type=float, default=float(os.environ.get("LR_MUL", "1.0")))
     parser.add_argument("--seed", type=int, default=int(os.environ.get("SEED", "0")))
     parser.add_argument("--group", default=os.environ.get("WANDB_GROUP"))
@@ -105,10 +95,12 @@ def prepare_env(args: argparse.Namespace) -> tuple[dict[str, str], Path, Path]:
 
     env["ORTH"] = args.orth
     env["LR_MUL"] = str(args.lr_mul)
+    env["BASE_LR"] = "0.008" if args.orth == "adamw" else "0.023"
     env["SEED"] = str(args.seed)
     env["TRAIN_TOKEN_BUDGET"] = str(args.train_token_budget)
     env["TRAIN_STEPS"] = str(compute_train_steps(args.train_token_budget))
     env["TRAIN_GRAD_ACCUM_STEPS"] = str(args.train_grad_accum_steps)
+    env["TRAIN_SEQ_LEN"] = str(FIXED_SEQ_LEN)
     env["EVAL_EVERY_TOKENS"] = str(args.eval_every_tokens)
     env["EVAL_TOKENS"] = str(args.eval_tokens)
     env["EVAL_BATCH_SIZE"] = str(args.eval_batch_size)

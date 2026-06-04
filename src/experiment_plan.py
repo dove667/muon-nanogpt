@@ -1,66 +1,105 @@
-
 import argparse
 import subprocess
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
-from src.utils import ROOT
-from src.plan.selection import run_completed
-from src.plan.stages import (
-    DEFAULT_BUDGET,
-    DEFAULT_EVAL_EVERY,
-    DEFAULT_EVAL_TOKENS,
-    DEFAULT_FINAL_BUDGET,
-    DEFAULT_FINAL_EVAL_EVERY,
-    DEFAULT_FINAL_EVAL_TOKENS,
-    DEFAULT_MAIN_BUDGET,
-    DEFAULT_MAIN_EVAL_EVERY,
-    DEFAULT_MAIN_EVAL_TOKENS,
-    DEFAULT_MAIN_TOP_N,
-    iter_core75,
-    iter_final,
-    iter_main,
-    iter_main_final,
-    iter_minimal,
-    iter_p2_t10,
-    iter_p2_t5,
-    iter_p2_t69,
-    iter_p2_t78,
-    iter_pe_expand,
-    iter_pe_init,
-    iter_pe_iter_expand,
-    iter_pe_lower_expand,
-    iter_pe_lr_expand,
-    iter_vanilla,
-)
+from src.utils import ROOT, RUNS_ROOT
 
 
-STAGES = {
-    "vanilla": iter_vanilla,
-    "p2_t5": iter_p2_t5,
-    "pe_init": iter_pe_init,
-    "p2_t10": iter_p2_t10,
-    "p2_t78": iter_p2_t78,
-    "p2_t69": iter_p2_t69,
-    "pe_lower_expand": iter_pe_lower_expand,
-    "pe_iter_expand": iter_pe_iter_expand,
-    "pe_lr_expand": iter_pe_lr_expand,
-    "pe_expand": iter_pe_expand,
-    "main": iter_main,
-    "final": iter_final,
-    "minimal": iter_minimal,
-    "core75": iter_core75,
-    "main_final": iter_main_final,
-}
+DEFAULT_GROUP = "fixed_t5"
+DEFAULT_TRAIN_TOKEN_BUDGET = 100_000_000
+DEFAULT_EVAL_EVERY_TOKENS = 10_000_000
+DEFAULT_EVAL_TOKENS = 2_097_152
+DEFAULT_TRAIN_GRAD_ACCUM_STEPS = 32
+DEFAULT_SPECTRAL_EVERY_TOKENS = 10_000_000
+DEFAULT_SPECTRAL_MAX_MATRICES = 5
+DEFAULT_SPECTRAL_MAX_DIM = 1024
+SEEDS = (0, 1, 2)
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    orth: str
+    group: str
+    name: str
+    lr_mul: float = 1.0
+    seed: int = 0
+    train_token_budget: int = DEFAULT_TRAIN_TOKEN_BUDGET
+    eval_every_tokens: int = DEFAULT_EVAL_EVERY_TOKENS
+    eval_tokens: int = DEFAULT_EVAL_TOKENS
+    ns_t: int | None = None
+    fast_steps: int | None = None
+    stable_steps: int | None = None
+    pe_t: int | None = None
+    pe_lower_bound: str | None = None
+
+    def to_cli_args(self) -> list[str]:
+        args = [
+            "--orth", self.orth,
+            "--group", self.group,
+            "--name", self.name,
+            "--lr-mul", str(self.lr_mul),
+            "--seed", str(self.seed),
+            "--train-token-budget", str(self.train_token_budget),
+            "--eval-every-tokens", str(self.eval_every_tokens),
+            "--eval-tokens", str(self.eval_tokens),
+        ]
+        if self.orth == "manual":
+            args.extend([
+                "--ns-t", str(self.ns_t),
+                "--fast-steps", str(self.fast_steps),
+                "--stable-steps", str(self.stable_steps),
+            ])
+        elif self.orth == "polar_express":
+            args.extend([
+                "--pe-t", str(self.pe_t),
+                "--pe-lower-bound", str(self.pe_lower_bound),
+            ])
+        return args
+
+
+def run_completed(group: str, name: str, runs_root: str | None = None) -> bool:
+    if runs_root is None:
+        root = RUNS_ROOT
+    else:
+        root = Path(runs_root).expanduser()
+        if not root.is_absolute():
+            root = ROOT / root
+    metrics_path = root / group / name / "metrics.jsonl"
+    if not metrics_path.exists() or metrics_path.stat().st_size == 0:
+        return False
+    last_line = metrics_path.read_text(encoding="utf-8").splitlines()[-1]
+    return '"status": "completed"' in last_line or '"status":"completed"' in last_line
+
+
+def build_run_specs(
+    *,
+    train_token_budget: int,
+    eval_every_tokens: int,
+    eval_tokens: int,
+    group: str,
+) -> list[RunSpec]:
+    specs: list[RunSpec] = []
+    for seed in SEEDS:
+        specs.extend([
+            RunSpec("adamw", group, f"adamw_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
+            RunSpec("vanilla", group, f"vanilla_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
+            RunSpec("manual", group, f"manual_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, ns_t=5, fast_steps=3, stable_steps=2),
+            RunSpec("fast", group, f"fast_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
+            RunSpec("polar_express", group, f"polar_express_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, pe_t=5, pe_lower_bound="1e-3"),
+        ])
+    return specs
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the experiment plan with explicit command-line parameters.")
-    parser.add_argument("stage", nargs="?", default="minimal", choices=sorted(STAGES))
+    parser = argparse.ArgumentParser(description="Launch the fixed 15-run experiment plan.")
+    parser.add_argument("--group", default=DEFAULT_GROUP)
     parser.add_argument("--skip-completed-runs", action="store_true")
-    parser.add_argument("--train-token-budget", type=int, default=DEFAULT_BUDGET)
-    parser.add_argument("--eval-every-tokens", type=int, default=DEFAULT_EVAL_EVERY)
+    parser.add_argument("--train-token-budget", type=int, default=DEFAULT_TRAIN_TOKEN_BUDGET)
+    parser.add_argument("--eval-every-tokens", type=int, default=DEFAULT_EVAL_EVERY_TOKENS)
     parser.add_argument("--eval-tokens", type=int, default=DEFAULT_EVAL_TOKENS)
-    parser.add_argument("--train-grad-accum-steps", type=int, default=32)
+    parser.add_argument("--train-grad-accum-steps", type=int, default=DEFAULT_TRAIN_GRAD_ACCUM_STEPS)
     parser.add_argument("--eval-batch-size", type=int, default=None)
     parser.add_argument("--eval-at-start", action="store_true")
     parser.add_argument("--log-every-steps", type=int, default=20)
@@ -78,21 +117,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-files")
     parser.add_argument("--val-files")
     parser.add_argument("--model-max-seq-len", type=int, default=0)
-    parser.add_argument("--spectral-every-tokens", type=int, default=10_000_000)
-    parser.add_argument("--spectral-max-matrices", type=int, default=5)
-    parser.add_argument("--spectral-max-dim", type=int, default=1024)
-    parser.add_argument("--main-token-budget", type=int, default=DEFAULT_MAIN_BUDGET)
-    parser.add_argument("--main-eval-every-tokens", type=int, default=DEFAULT_MAIN_EVAL_EVERY)
-    parser.add_argument("--main-eval-tokens", type=int, default=DEFAULT_MAIN_EVAL_TOKENS)
-    parser.add_argument("--main-top-n", type=int, default=DEFAULT_MAIN_TOP_N)
-    parser.add_argument("--final-token-budget", type=int, default=DEFAULT_FINAL_BUDGET)
-    parser.add_argument("--final-eval-every-tokens", type=int, default=DEFAULT_FINAL_EVAL_EVERY)
-    parser.add_argument("--final-eval-tokens", type=int, default=DEFAULT_FINAL_EVAL_TOKENS)
+    parser.add_argument("--spectral-every-tokens", type=int, default=DEFAULT_SPECTRAL_EVERY_TOKENS)
+    parser.add_argument("--spectral-max-matrices", type=int, default=DEFAULT_SPECTRAL_MAX_MATRICES)
+    parser.add_argument("--spectral-max-dim", type=int, default=DEFAULT_SPECTRAL_MAX_DIM)
     return parser.parse_args()
 
 
-def launch(spec, args: argparse.Namespace) -> None:
-    if args.skip_completed_runs and run_completed(spec.group, spec.name):
+def launch(spec: RunSpec, args: argparse.Namespace) -> None:
+    if args.skip_completed_runs and run_completed(spec.group, spec.name, args.runs_root):
         print("=" * 80)
         print(f"skip completed: {spec.group}/{spec.name}")
         print("=" * 80)
@@ -136,42 +168,15 @@ def launch(spec, args: argparse.Namespace) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
-def stage_specs(args: argparse.Namespace):
-    common = dict(
-        budget=args.train_token_budget,
-        eval_every=args.eval_every_tokens,
-        eval_tokens=args.eval_tokens,
-    )
-    if args.stage == "main":
-        return iter_main(
-            budget=args.main_token_budget,
-            eval_every=args.main_eval_every_tokens,
-            eval_tokens=args.main_eval_tokens,
-            top_n=args.main_top_n,
-        )
-    if args.stage == "final":
-        return iter_final(
-            budget=args.final_token_budget,
-            eval_every=args.final_eval_every_tokens,
-            eval_tokens=args.final_eval_tokens,
-        )
-    if args.stage == "main_final":
-        return iter_main_final(
-            **common,
-            main_budget=args.main_token_budget,
-            main_eval_every=args.main_eval_every_tokens,
-            main_eval_tokens=args.main_eval_tokens,
-            main_top_n=args.main_top_n,
-            final_budget=args.final_token_budget,
-            final_eval_every=args.final_eval_every_tokens,
-            final_eval_tokens=args.final_eval_tokens,
-        )
-    return STAGES[args.stage](**common)
-
-
 def main() -> int:
     args = parse_args()
-    for spec in stage_specs(args):
+    specs = build_run_specs(
+        train_token_budget=args.train_token_budget,
+        eval_every_tokens=args.eval_every_tokens,
+        eval_tokens=args.eval_tokens,
+        group=args.group,
+    )
+    for spec in specs:
         launch(spec, args)
     return 0
 

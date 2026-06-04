@@ -30,13 +30,25 @@ class OrthogonalizerConfig:
         return 1.0 + self.norm_safety_eps
 
     def to_record(self) -> dict[str, object]:
+        if self.orth_mode == "manual":
+            fast_steps = self.fast_steps
+            stable_steps = self.stable_steps
+        elif self.orth_mode == "fast":
+            fast_steps = len(self.coeff_schedule)
+            stable_steps = 0
+        elif self.orth_mode == "vanilla":
+            fast_steps = 0
+            stable_steps = len(self.coeff_schedule)
+        else:
+            fast_steps = None
+            stable_steps = None
         return {
             "orthogonalizer_type": self.orth_mode,
             "orth_schedule_name": self.schedule_name,
             "coeff_schedule": self.coeff_schedule,
             "T_ns": len(self.coeff_schedule),
-            "fast_steps": self.fast_steps if self.orth_mode == "manual" else (5 if self.orth_mode == "vanilla" else None),
-            "stable_steps": self.stable_steps if self.orth_mode == "manual" else (0 if self.orth_mode == "vanilla" else None),
+            "fast_steps": fast_steps,
+            "stable_steps": stable_steps,
             "pe_T": self.pe_t if self.orth_mode == "polar_express" else None,
             "pe_lower_bound": self.pe_lower_bound_raw if self.orth_mode == "polar_express" else None,
             "pe_cushion": self.pe_cushion if self.orth_mode == "polar_express" else None,
@@ -105,7 +117,7 @@ def polar_express_coefficients(lower_bound: float, num_iters: int, safety_factor
 
 
 def build_orthogonalizer_config_from_env() -> OrthogonalizerConfig:
-    orth_mode = os.environ.get("ORTH", "vanilla").strip().lower()
+    orth_mode = os.environ.get("ORTH", "fast").strip().lower()
     ns_t = int(os.environ.get("NS_T", "5"))
     fast_steps = int(os.environ.get("FAST_STEPS", str(ns_t)))
     stable_steps = int(os.environ.get("STABLE_STEPS", str(max(ns_t - fast_steps, 0))))
@@ -115,20 +127,24 @@ def build_orthogonalizer_config_from_env() -> OrthogonalizerConfig:
     pe_safety_factor = float(os.environ.get("PE_SAFETY_FACTOR", "2e-2"))
     lr_mul = float(os.environ.get("LR_MUL", "1.0"))
 
-    if orth_mode == "vanilla":
-        coeffs, eps, schedule = [FAST_COEFF] * 5, 0.0, "old_fast5"
+    if orth_mode == "adamw":
+        coeffs, eps, schedule = [], 0.0, "adamw"
+    elif orth_mode == "vanilla":
+        coeffs, eps, schedule = [STABLE_COEFF] * 5, 0.0, "vanilla_T5"
+    elif orth_mode == "fast":
+        coeffs, eps, schedule = [FAST_COEFF] * 5, 0.0, "fast_T5"
     elif orth_mode == "manual":
         if ns_t < 0 or fast_steps < 0 or stable_steps < 0:
             raise RuntimeError("manual schedule counts must be non-negative")
         if fast_steps + stable_steps != ns_t:
             raise RuntimeError(f"FAST_STEPS + STABLE_STEPS must equal NS_T, got {fast_steps}+{stable_steps}!={ns_t}")
-        coeffs, eps, schedule = [FAST_COEFF] * fast_steps + [STABLE_COEFF] * stable_steps, 0.0, f"p2_T{ns_t}_f{fast_steps}_s{stable_steps}"
+        coeffs, eps, schedule = [FAST_COEFF] * fast_steps + [STABLE_COEFF] * stable_steps, 0.0, f"manual_T{ns_t}_f{fast_steps}_s{stable_steps}"
     elif orth_mode == "polar_express":
         lower_bound = _parse_lower_bound(pe_lower_bound_raw)
         coeffs = polar_express_coefficients(lower_bound, pe_t, pe_safety_factor, pe_cushion)
         eps, schedule = pe_safety_factor, f"pe_T{pe_t}_l{pe_lower_bound_raw}"
     else:
-        raise RuntimeError(f"unknown ORTH={orth_mode!r}; expected vanilla, manual, or polar_express")
+        raise RuntimeError(f"unknown ORTH={orth_mode!r}; expected adamw, vanilla, fast, manual, or polar_express")
 
     return OrthogonalizerConfig(
         orth_mode=orth_mode,

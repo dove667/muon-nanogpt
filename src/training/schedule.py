@@ -1,4 +1,5 @@
 
+import math
 import os
 import uuid
 from dataclasses import dataclass
@@ -73,16 +74,30 @@ class TrainingStage:
 
 
 class TrainingSchedule:
-    def __init__(self, stages: list[TrainingStage], scheduled_iterations: int, extension_iterations: int, device, cooldown_frac: float = 0.5, split_embed_stage: int = 2, ws_post_yarn_ext: int = 20):
+    def __init__(
+        self,
+        stages: list[TrainingStage],
+        scheduled_iterations: int,
+        extension_iterations: int,
+        device,
+        warmup_frac: float = 0.10,
+        min_lr_frac: float = 0.10,
+        split_embed_stage: int | None = None,
+        ws_post_yarn_ext: int = 7,
+    ):
         self.stages = stages
         self.scheduled_iterations = scheduled_iterations
-        self.cooldown_frac = cooldown_frac
+        self.warmup_frac = warmup_frac
+        self.min_lr_frac = min_lr_frac
         self.ws_post_yarn_ext = ws_post_yarn_ext
         self.total_steps = self.scheduled_iterations + extension_iterations
-        ends = [0, *[round(c * scheduled_iterations) for c in accumulate(s.duration for s in stages[:-1])], self.total_steps]
-        assert self.scheduled_iterations == ends[-2]
-        self.boundaries = list(pairwise(ends))
-        self.split_step = self.boundaries[split_embed_stage][0] | 1
+        if len(stages) == 1:
+            self.boundaries = [(0, self.total_steps)]
+        else:
+            ends = [0, *[round(c * scheduled_iterations) for c in accumulate(s.duration for s in stages[:-1])], self.total_steps]
+            assert self.scheduled_iterations == ends[-2]
+            self.boundaries = list(pairwise(ends))
+        self.split_step = None if split_embed_stage is None else (self.boundaries[split_embed_stage][0] | 1)
         self.mtp_weights = []
         for step in range(self.total_steps + 1):
             stage, t = self.lookup(step)
@@ -98,29 +113,33 @@ class TrainingSchedule:
 
     def get_lr(self, step: int) -> float:
         stage, _ = self.lookup(step)
-        lr = stage.lr_mul
-        cd_start = int(self.scheduled_iterations * (1 - self.cooldown_frac))
-        if step >= cd_start:
-            t = min(1.0, (step - cd_start) / (self.scheduled_iterations - cd_start))
-            lr = lr * (1 - t) + 0.15 * t
-        return lr
+        if self.scheduled_iterations <= 1:
+            return stage.lr_mul
+
+        warmup_steps = max(1, round(self.scheduled_iterations * self.warmup_frac))
+        if step < warmup_steps:
+            return stage.lr_mul * ((step + 1) / warmup_steps)
+
+        progress = min(1.0, (step - warmup_steps) / max(1, self.scheduled_iterations - warmup_steps))
+        cosine = 0.5 * (1.0 + math.cos(progress * math.pi))
+        decay = self.min_lr_frac + (1.0 - self.min_lr_frac) * cosine
+        return stage.lr_mul * decay
 
 
 def default_training_stages() -> list[TrainingStage]:
     return [
-        TrainingStage(duration=1/3, train_max_seq_len=896, batch_size=8 * 2048 * 8, window_sizes=(1, 3), lr_mul=1.0, mtp_weights_start=[1.0, 0.5, 0.25], mtp_weights_end=[1.0, 0.5, 0.0]),
-        TrainingStage(duration=1/3, train_max_seq_len=2048, batch_size=16 * 2048 * 8, window_sizes=(3, 7), lr_mul=1.52, mtp_weights_start=[1.0, 0.5], mtp_weights_end=[1.0, 0.0]),
-        TrainingStage(duration=1/3, train_max_seq_len=2048, batch_size=24 * 2048 * 8, window_sizes=(5, 11), lr_mul=1.73, mtp_weights_start=[1.0], mtp_weights_end=[1.0]),
-        TrainingStage(train_max_seq_len=2048, batch_size=24 * 2048 * 8, window_sizes=(6, 13), lr_mul=1.0, mtp_weights_start=[1.0], mtp_weights_end=[1.0]),
+        TrainingStage(
+            duration=1.0,
+            train_max_seq_len=2048,
+            batch_size=16 * 2048 * 8,
+            window_sizes=(3, 7),
+            lr_mul=1.0,
+            mtp_weights_start=[1.0, 0.0],
+            mtp_weights_end=[1.0, 0.0],
+        ),
     ]
 
 
 def get_muon_momentum(step: int, total_steps: int, muon_warmup_steps=300, muon_cooldown_steps=50, momentum_min=0.85, momentum_max=0.95):
-    momentum_cd_start = total_steps - muon_cooldown_steps
-    if step < muon_warmup_steps:
-        frac = step / muon_warmup_steps
-        return momentum_min + frac * (momentum_max - momentum_min)
-    if step > momentum_cd_start:
-        frac = (step - momentum_cd_start) / muon_cooldown_steps
-        return momentum_max - frac * (momentum_max - momentum_min)
+    del step, total_steps, muon_warmup_steps, muon_cooldown_steps, momentum_min
     return momentum_max
