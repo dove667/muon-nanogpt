@@ -28,18 +28,15 @@ class DistributedContext:
     base_seed: int
 
 
-def build_code_snapshot(script_path: str) -> str:
-    with open(script_path, "r", encoding="utf-8") as handle:
-        return handle.read()
-
 
 def setup_distributed_from_env() -> DistributedContext:
-    local_rank = int(os.environ["LOCAL_RANK"])
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.empty(1, device=f"cuda:{local_rank}", requires_grad=True).backward()
 
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    assert 8 % world_size == 0, "world_size must be a divisor of 8"
+    rank = int(os.environ.get("RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size > 1:
+        assert 8 % world_size == 0, "world_size must be a divisor of 8"
 
     grad_accum_steps = int(
         os.environ.get(
@@ -53,8 +50,9 @@ def setup_distributed_from_env() -> DistributedContext:
     device = torch.device("cuda", local_rank)
     torch.cuda.set_device(device)
 
-    dist.init_process_group(backend="cuda:nccl,cpu:gloo", device_id=device)
-    dist.barrier()
+    if world_size > 1:
+        dist.init_process_group(backend="cuda:nccl,cpu:gloo", device_id=device)
+        dist.barrier()
 
     base_seed = int(os.environ.get("SEED", "0"))
     random.seed(base_seed + rank)
@@ -269,7 +267,8 @@ def run_validation(
             ).mean()
     val_loss /= val_steps
     del val_loader
-    dist.reduce(val_loss, 0, op=dist.ReduceOp.AVG)
+    if dist.is_initialized():
+        dist.reduce(val_loss, 0, op=dist.ReduceOp.AVG)
     eval_time_s = time.perf_counter() - eval_start_time
     logger.print0(
         f"step:{step}/{train_steps} val_loss:{val_loss:.4f} "

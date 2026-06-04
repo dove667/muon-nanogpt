@@ -358,7 +358,7 @@ class GPT(nn.Module):
         # sqrt(1.1) per sublayer so cumulative per-layer scaling is 1.1
         self.resid_lambdas = nn.Parameter(torch.full((num_layers, 2), 1.1**0.5))
 
-        pad = (-num_layers * 2 - 3) % dist.get_world_size()
+        pad = (-num_layers * 2 - 3) % (dist.get_world_size() if dist.is_initialized() else 1)
         self.scalars = nn.Parameter(
             torch.cat(
                 [

@@ -15,6 +15,7 @@ DEFAULT_SPECTRAL_EVERY_TOKENS = 10_000_000
 DEFAULT_SPECTRAL_MAX_MATRICES = 5
 DEFAULT_SPECTRAL_MAX_DIM = 1024
 SEEDS = (0, 1, 2)
+TRAINER_PY = (ROOT / "src" / "training" / "train.py").resolve()
 
 
 @dataclass(frozen=True)
@@ -115,10 +116,6 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--runs-root",
                         help="Root directory for run outputs")
-    parser.add_argument("--training-root",
-                        help="Root directory for training artifacts")
-    parser.add_argument("--trainer-py",
-                        help="Path to custom trainer Python module")
     parser.add_argument("--nproc-per-node", type=int, default=1,
                         help="Number of processes per node")
     parser.add_argument("--data-path",
@@ -142,7 +139,7 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
         print("=" * 80)
         return
 
-    command = [sys.executable, "-m", "src.run_training", *spec.to_cli_args()]
+    command = [sys.executable, str(TRAINER_PY), *spec.to_cli_args()]
     command.extend([
         "--train-grad-accum-steps", str(args.train_grad_accum_steps),
         "--log-every-steps", str(args.log_every_steps),
@@ -163,10 +160,6 @@ def launch(spec: RunSpec, args: argparse.Namespace) -> None:
         command.extend(["--wandb-mode", args.wandb_mode])
     if args.runs_root:
         command.extend(["--runs-root", args.runs_root])
-    if args.training_root:
-        command.extend(["--training-root", args.training_root])
-    if args.trainer_py:
-        command.extend(["--trainer-py", args.trainer_py])
     if args.data_path:
         command.extend(["--data-path", args.data_path])
     if args.model_max_seq_len > 0:

@@ -30,6 +30,8 @@
   - 删除 `src/plan/` 多阶段计划层
   - `RunSpec` 与 15-run fixed plan 直接收敛到 `src/experiment_plan.py`
   - 删除训练产物和 W&B 中的 `group` 维度，run 目录改为 `runs/<name>/`
+  - 删除 `src/run_training.py` 中间启动层
+  - `src/training/train.py` 现在同时承担单次训练入口与多卡 launcher
   - `docs/runbook.md` 改为单一实验入口说明
 - 分析层已适配 fixed 实验：
   - `summarize_runs.py` 输出 `run_summary.csv` 与 `orth_summary.csv`
@@ -43,9 +45,10 @@
 - fixed 计划已经没有真实的“阶段选择”含义，保留额外目录和别名只会增加理解成本
 - 更密但更轻的验证更适合当前研究主题：我们关心的是不同 orth 策略的收敛形状和稳定性，而不是只看几个稀疏终点
 - 将固定 batch 下调到更保守规模，可以减少“大 batch 本身”对优化动力学的额外影响
+- 单卡训练现在是一等路径：1×4090 可以直接跑固定实验，4 卡只影响吞吐，不再是代码结构上的前提
 
 ## 待确认
 
 - 当前固定栈保留了现有第二阶段的窗口配置 `(3, 7)`，MTP 权重固定为 `[1.0, 0.0]`
 - YaRN 逻辑未删除，只是不再随阶段切换
-- 若后续需要复现实验，可直接从 `python -m src.experiment_plan` 启动
+- 若后续需要复现实验，可直接从 `conda run -n AI python src/training/train.py ...` 或 `conda run -n AI python -m src.experiment_plan` 启动

@@ -2,15 +2,14 @@
 
 ## 环境
 
-4× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121。使用 `torchrun` 启动分布式训练，无需 `accelerate` 或 `deepspeed`。
+默认实验环境是 4× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121。现在单次训练入口已经直接收敛到 `src/training/train.py`：1 卡可直接运行，只有在 `--nproc-per-node > 1` 时才会自动转成 `torchrun`。
 
 数据路径按实际位置设置，以下示例中用 `/data/fineweb10B` 代替。
 
-## 1. 单次训练（`python -m src.run_training`）
+## 1. 单次训练（`python src/training/train.py`）
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 NPROC_PER_NODE=4 \
-python -m src.run_training \
+python src/training/train.py \
   --orth vanilla \
   --name smoke_test \
   --lr-mul 1.0 \
@@ -21,20 +20,22 @@ python -m src.run_training \
   --wandb off
 ```
 
+如果要用 4 卡分布式，只需要额外给 `--nproc-per-node 4`，训练脚本会自动用 `torchrun` 重启自己。研究阶段如果你更想并行跑 4 个独立实验，通常更推荐 `CUDA_VISIBLE_DEVICES=0/1/2/3` 分别起 4 个单卡 run，而不是把 4 张卡绑成一个 DDP run。
+
 使用 Manual、Fast、AdamW 或 Polar Express 时可这样切换：
 
 ```bash
 # Manual：5 步中前 3 步快速、后 2 步稳定
-python -m src.run_training --orth manual --fast-steps 3 --stable-steps 2 ...
+python src/training/train.py --orth manual --fast-steps 3 --stable-steps 2 ...
 
 # Fast：5 步全 fast 系数
-python -m src.run_training --orth fast ...
+python src/training/train.py --orth fast ...
 
 # AdamW baseline：矩阵参数不做 Muon 正交化
-python -m src.run_training --orth adamw ...
+python src/training/train.py --orth adamw ...
 
 # Polar Express：奇异值下界 1e-3
-python -m src.run_training --orth polar_express --pe-lower-bound 1e-3 ...
+python src/training/train.py --orth polar_express --pe-lower-bound 1e-3 ...
 ```
 
 ### 参数
@@ -85,6 +86,7 @@ python -m src.run_training --orth polar_express --pe-lower-bound 1e-3 ...
 | `--wandb-project` | str | `muon-nanogpt` | W&B 项目名 |
 | `--wandb-entity` | str | — | W&B entity 名 |
 | `--wandb-mode` | str | — | W&B 模式（如 `offline`、`dryrun`） |
+| `--runs-root` | str | `runs` | 运行输出根目录 |
 
 #### 谱分析
 
@@ -189,7 +191,7 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 |---|---|
 | `config.json` | 完整配置快照 |
 | `metrics.jsonl` | 每步一条 JSON（训练指标、验证指标、谱指标） |
-| `console.log` | torchrun 标准输出 |
+| `console.log` | 单卡或 launcher 标准输出 |
 
 分析脚本读取 `runs/` 并输出到 `results/`：
 
@@ -200,7 +202,7 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 
 ## 注意
 
-- `train.py` 在 `torchrun` 内部运行，使用相对导入（如 `import polar`），**不要改为包导入**。
+- `train.py` 现在既是单次训练入口，也是多卡 launcher；它仍然依赖脚本级相对导入（如 `import polar`），**不要改为包导入**。
 - 首次运行会编译模型和预热 CUDA 内核（约 7 分钟），后续运行复用 `.torchinductor/` 缓存。
 - `5090_results/` 是之前硬件的存档输出，**请勿修改**。
 - 固定实验栈默认使用 `seq_len=2048`、`batch=8*2048*8`、`grad_accum=16`、`window=(3,7)` 与 warmup+cosine LR。
