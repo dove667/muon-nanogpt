@@ -4,7 +4,7 @@ training:
   tokens_per_step: 131072        # total tokens per optimizer step
   seq_len: 2048
   grad_accum_steps: 16
-  warmup_frac: 0.10
+  warmup_frac: 0.02
   min_lr_frac: 0.10
   val_ppl_max: 20.0
 
@@ -31,11 +31,11 @@ optimizer:
   adam_beta1: 0.9
   adam_beta2: 0.95
 
-  base_lr_adamw: 0.008
+  base_lr_adamw: 0.0006
   adam_defaults:
-    lr: 0.008
+    lr: 0.0006
     eps: 1.0e-10
-    weight_decay: 0.005
+    weight_decay: 0.1
 
   base_lr_muon: 0.023
   muon_defaults:

@@ -43,7 +43,7 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 | 随机种子 | 固定为代码内常量 0 |
 | 位置编码 | 标准 RoPE |
 | 注意力 | 标准 causal self-attention |
-| LR 调度 | warmup（前 10% 步线性升至峰值）→ cosine decay 至峰值 10% |
+| LR 调度 | warmup（前 2% 步线性升至峰值）→ cosine decay 至峰值 10% |
 
 ### Muon 组（Vanilla / Manual / Fast / Polar Express）
 
@@ -65,9 +65,9 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 
 | 参数 | 值 |
 |------|-----|
-| 学习率 | 0.008 |
+| 学习率 | 0.0006 |
 | $\beta_1$, $\beta_2$ | (0.9, 0.95) |
-| weight decay | 0.005 |
+| weight decay | 0.1 |
 
 ## 三、运行模式
 

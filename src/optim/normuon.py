@@ -181,16 +181,15 @@ class NorMuonAndAdam:
 
         bias1 = 1 - beta1**step
         bias2 = 1 - beta2**step
-        step_size = lr * (bias2**0.5 / bias1)
-        eff_wd = lr * lr * param_cfg.weight_decay * param_cfg.wd_mul
+        step_size = lr / bias1
+        bias2_sqrt = bias2**0.5
 
         exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
         exp_avg.mul_(beta1).add_(grad_chunk, alpha=1 - beta1)
         exp_avg_sq.mul_(beta2).addcmul_(grad_chunk, grad_chunk, value=1 - beta2)
-        update = exp_avg.div(exp_avg_sq.sqrt().add_(param_cfg.eps)).mul_(step_size)
-        mask = (update * param) > 0
-        update.addcmul_(param, mask, value=eff_wd)
-        param.add_(other=update, alpha=-1.0)
+        denom = exp_avg_sq.sqrt().div_(bias2_sqrt).add_(param_cfg.eps)
+        param.mul_(1 - lr * param_cfg.weight_decay * param_cfg.wd_mul)
+        param.addcdiv_(exp_avg, denom, value=-step_size)
 
     def _normuon_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig) -> None:
         state = self.param_states[param]
