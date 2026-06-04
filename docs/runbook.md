@@ -67,15 +67,7 @@ python -m src.analysis.summarize_runs
 python -m src.analysis.plot_curves
 ```
 
-输出：`results/figures/` 下 7 张 PNG
-
-### 仪表板
-
-```bash
-python -m src.analysis.build_dashboard
-```
-
-输出：`results/dashboard.html`
+输出：`results/figures/` 下 val_loss_vs_tokens / val_loss_vs_wall / final_val_loss
 
 ## 3. 数据下载
 
@@ -95,9 +87,8 @@ python scripts/download_fineweb.py [num_chunks]
 分析脚本读取 `runs/` 并输出到 `results/`：
 
 - `results/run_summary.csv`：逐 run 汇总
-- `results/orth_summary.csv`：按配置聚合后的 mean/std
+- `results/orth_summary.csv`：按配置聚合
 - `results/figures/`：对比图
-- `results/dashboard.html`：轻量 HTML 报告
 
 ## 注意
 

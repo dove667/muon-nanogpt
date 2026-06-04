@@ -59,9 +59,7 @@ src/
 │   └── __init__.py
 ├── analysis/                    # 训练后分析
 │   ├── summarize_runs.py        # → results/run_summary.csv + orth_summary.csv
-│   ├── plot_curves.py           # → results/figures/（7 张 PNG）
-│   ├── build_dashboard.py       # → results/dashboard.html
-│   ├── ns_coefficients.py       # Neville-Simpson 系数分析
+│   ├── plot_curves.py           # → results/figures/（3 张 PNG）
 │   └── __init__.py
 ```
 
@@ -80,8 +78,7 @@ src/
 
 训练完成后依次运行：
 1. `python -m src.analysis.summarize_runs` → `results/run_summary.csv` + `results/orth_summary.csv`
-2. `python -m src.analysis.plot_curves` → `results/figures/`（7 张 PNG）
-3. `python -m src.analysis.build_dashboard` → `results/dashboard.html`
+2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / val_loss_vs_wall / final_val_loss）
 
 ## 项目约定
 
