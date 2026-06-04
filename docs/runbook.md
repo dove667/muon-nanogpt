@@ -8,7 +8,7 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 
 ## 配置
 
-所有固定超参数集中在项目根 `config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 3 个参数。
+所有固定超参数集中在 `src/config/config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 3 个参数。
 
 当前固定训练栈：
 
@@ -24,17 +24,17 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 ## 1. 单次训练
 
 ```bash
-python src/training/train.py --orth fast --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth fast --seed 0 --data-path /data/fineweb10B
 ```
 
 五种 orth 模式：
 
 ```bash
-python src/training/train.py --orth adamw         --seed 0 --data-path /data/fineweb10B
-python src/training/train.py --orth vanilla       --seed 0 --data-path /data/fineweb10B
-python src/training/train.py --orth fast          --seed 0 --data-path /data/fineweb10B
-python src/training/train.py --orth manual        --seed 0 --data-path /data/fineweb10B
-python src/training/train.py --orth polar_express --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth adamw         --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth vanilla       --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth fast          --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth manual        --seed 0 --data-path /data/fineweb10B
+python -m src.training.train --orth polar_express --seed 0 --data-path /data/fineweb10B
 ```
 
 ### 参数
@@ -45,7 +45,7 @@ python src/training/train.py --orth polar_express --seed 0 --data-path /data/fin
 | `--seed` | int | `0` | 随机种子 |
 | `--data-path` | str | **必传** | 数据集根目录 |
 
-所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `config.yaml` 中管理。
+所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `src/config/config.yaml` 中管理。
 
 ## 2. 完整实验计划
 
@@ -94,6 +94,12 @@ python -m src.analysis.build_dashboard
 
 输出：`results/dashboard.html`
 
+## 4. 数据下载
+
+```bash
+python scripts/download_fineweb.py [num_chunks]
+```
+
 ## 运行产物
 
 每轮训练输出到 `runs/<name>/`：
@@ -114,4 +120,4 @@ python -m src.analysis.build_dashboard
 
 - 数据格式：FineWeb-10B 预分词 token shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
 - 训练时使用固定长度 `seq_len=2048` 的朴素连续 block 采样，不再做 BOS packing 或变长 attention
-- 固定训练栈详见 `config.yaml`
+- 固定训练栈详见 `src/config/config.yaml`

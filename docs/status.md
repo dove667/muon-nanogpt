@@ -4,9 +4,10 @@
 
 - 实验编排固定为 5 配置 × 3 seeds = 15 runs
 - 训练入口保持两层：
-  - `src/training/train.py`：单次训练
-  - `src/experiment_plan.py`：批量跑 15 个 run
-- 所有固定超参数集中在 `config.yaml`
+  - `python -m src.training.train`：单次训练
+  - `python -m src.experiment_plan`：批量跑 15 个 run
+- 所有固定超参数集中在 `src/config/config.yaml`
+- 目录已按职责重新组织（model / data / config / optim / training / analysis 各一层）
 
 ## 已完成
 
@@ -40,6 +41,9 @@
   - 保留纯函数负责生成系数、norm factor 和日志记录
 - `ForwardScheduleConfig` 也已移除：
   - `model.forward(...)` 回到最直接的 `(inputs, targets)` 签名
+- 训练函数传参已统一收口：
+  - 运行时对象和实验变量继续显式传递
+  - `eval/log/spectral/train budget` 等固定栈参数统一直接从 `config.yaml` 读取
 - `manual` 默认已校正为实验设计要求的 `3 fast + 2 stable`
 - 批量实验计划已同步修正 run 命名，断点续跑仍然有效
 - README / runbook / experiments / dashboard 文案已同步到标准 Transformer + 单卡 + 固定长度 block 采样口径
@@ -51,6 +55,7 @@
 - 标准 Transformer + 固定长度数据 + 每步更新更容易解释收敛差异
 - orth 调度层改成纯函数后，训练主路径更短，更容易看清“实验变量到底是什么”
 - optimizer 构造和训练状态拆开后，训练循环更像直接可读的实验脚本，而不是小框架
+- 固定配置不再层层下传后，函数签名更能反映“哪些东西真的会变”
 - 删除分布式和竞速残留后，单卡 4090 上复现实验更直接
 
 ## 固定训练栈

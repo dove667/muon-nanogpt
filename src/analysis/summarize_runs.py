@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import mean, stdev
 
-from src.utils import ROOT, read_jsonl
+from src.paths import ROOT, read_jsonl
 
 ORTH_ORDER = ["adamw", "vanilla", "manual", "fast", "polar_express"]
 

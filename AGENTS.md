@@ -7,15 +7,15 @@
 
 ## 训练入口
 
-- 单次训练：`python src/training/train.py --orth <mode> --seed <n> --data-path /data/fineweb10B`
+- 单次训练：`python -m src.training.train --orth <mode> --seed <n> --data-path /data/fineweb10B`
 - 完整实验（5 配置 × 3 seeds = 15 runs）：`python -m src.experiment_plan --data-path /data/fineweb10B [--skip-completed-runs]`
 - 162M 模型 4090 单卡完全够用，无分布式逻辑
 - 并行跑多个独立实验用 `CUDA_VISIBLE_DEVICES=0 python ...`
 
 ## 配置管理
 
-- **`config.yaml`**（项目根）是唯一配置来源，包含所有固定训练/模型/优化器/正交化超参数
-- `src/training/config/` 负责 YAML 加载，导出 `TRAINING` `MODEL` `OPTIMIZER` 模块级常量
+- **`src/config/config.yaml`** 是唯一配置来源，包含所有固定训练/模型/优化器/正交化超参数
+- `src/config/` 负责 YAML 加载，导出 `TRAINING` `MODEL` `OPTIMIZER` 模块级常量
 - train.py CLI 仅暴露必须变化的 3 个参数：`--data-path` `--orth` `--seed`
 
 ## 五种 orth 模式
@@ -28,27 +28,51 @@
 | `manual` | fast_steps 步 fast + stable_steps 步 stable（和为 5） |
 | `polar_express` | 每步自适应五次多项式 |
 
-参数值定义在 `config.yaml` → `orthogonalization` 段。
+参数值定义在 `src/config/config.yaml` → `orthogonalization` 段。
 
 ## 目录结构
 
 ```
-src/training/
-├── config/                    # YAML 加载与导出
-├── data/                      # 数据流水线（Shard, data_generator）
-├── optim/                     # 优化器（NorMuonAndAdam, TrainingManager）
-├── orth/                      # 正交化（OrthogonalizerConfig, polar_express）
-├── model.py                   # GPT 模型
-├── metrics.py                 # 频谱指标采集
-├── run_support.py             # Logger, 训练/验证循环, setup_device
-└── train.py                   # 训练入口
+src/
+├── paths.py                     # ROOT, RUNS_ROOT, read_jsonl（项目路径工具）
+├── config/                      # YAML 配置加载 → TRAINING, MODEL, OPTIMIZER 常量
+│   ├── config.yaml
+│   ├── loader.py
+│   └── __init__.py
+├── data/                        # 数据管线（Shard, data_generator）
+│   ├── pipeline.py
+│   └── __init__.py
+├── model/                       # GPT 模型定义
+│   ├── gpt.py                   # GPT, RoPE, TransformerBlock, build_model
+│   └── __init__.py
+├── optim/                       # 优化器（Muon + Adam + 正交化）
+│   ├── normuon.py               # NorMuonAndAdam, ParamConfig
+│   ├── manager.py               # build_optimizer, step_optimizer, compute_lr
+│   ├── orth.py                  # 系数调度, orth_record, orth_norm_factor
+│   ├── polar.py                 # make_polar_express
+│   └── __init__.py
+├── training/                    # 训练循环编排
+│   ├── train.py                 # 单次训练入口
+│   ├── logger.py                # 日志写入（Logger）
+│   ├── metrics.py               # 频谱指标采集
+│   ├── utils.py                 # setup_device, default_run_name, resolve_data_path
+│   └── __init__.py
+├── analysis/                    # 训练后分析
+│   ├── summarize_runs.py        # → results/run_summary.csv + orth_summary.csv
+│   ├── plot_curves.py           # → results/figures/（7 张 PNG）
+│   ├── build_dashboard.py       # → results/dashboard.html
+│   ├── ns_coefficients.py       # Neville-Simpson 系数分析
+│   └── __init__.py
+└── experiment_plan.py           # 多 run 编排
 ```
+
+数据下载脚本独立存放：`scripts/download_fineweb.py`
 
 ## 架构要点
 
-- 模型权重存储在三个扁平参数 bank（`qk_bank`, `vo_bank`, `mlp_bank`）而非 `nn.Linear`，forward 时切片使用
+- 模型为标准 per-layer prenorm Transformer + RoPE，使用标准 `nn.Linear`
 - 每个 `nn.Parameter` 有 `.label` 属性，优化器靠它做 Adam/NorMuon 分发
-- `orth_mode != "adamw"` 时：Adam 参数奇数步更新，NorMuon 参数每步更新
+- `orth_mode != "adamw"` 时：矩阵参数走 Muon，非矩阵参数（embedding、LayerNorm 等）走 Adam
 - 无 checkpoint 保存
 - LM head 与 embedding 权重绑定（transpose 共享）
 - 训练为纯单卡，无 sharding/all-reduce
@@ -67,6 +91,7 @@ src/training/
 - 数据格式：FineWeb-10B 预分词 BOS 对齐 shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
 - 每轮训练输出到 `runs/<name>/`（`config.json` + `metrics.jsonl`）
 - 无 W&B，所有日志为本地 JSONL
+- 所有运行命令使用 `python -m <module>` 格式
 
 ## 项目状态追踪
 
@@ -75,5 +100,5 @@ src/training/
 ## 实验原则
 
 - 控制变量优先于超参数搜索
-- 训练栈固定：所有超参数见 `config.yaml`
+- 训练栈固定：所有超参数见 `src/config/config.yaml`
 - 不做无假设驱动的暴力网格搜索

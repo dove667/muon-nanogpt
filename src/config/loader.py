@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 
-_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 
 @dataclass(slots=True, frozen=True)

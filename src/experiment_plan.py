@@ -3,10 +3,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from src.utils import ROOT, RUNS_ROOT
+from src.paths import ROOT, RUNS_ROOT
 
 SEEDS = (0, 1, 2)
-TRAINER_PY = (ROOT / "src" / "training" / "train.py").resolve()
 
 
 @dataclass(frozen=True)
@@ -67,7 +66,7 @@ def launch(spec: RunSpec, data_path: str, skip_completed: bool) -> None:
         return
 
     command = [
-        sys.executable, str(TRAINER_PY),
+        sys.executable, "-m", "src.training.train",
         "--orth", spec.orth,
         "--seed", str(spec.seed),
         "--data-path", data_path,

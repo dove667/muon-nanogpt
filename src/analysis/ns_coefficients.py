@@ -6,7 +6,7 @@ import argparse
 import csv
 from pathlib import Path
 
-from src.utils import ROOT
+from src.paths import ROOT
 COEFF_SETS = {
     "simple_track3": (2.0, -1.5, 0.5, 12),
     "deepseek": (3.4445, -4.7750, 2.0315, 5),

@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from src.config import MODEL, TRAINING
+
 
 class RoPE(nn.Module):
     def __init__(self, head_dim: int, max_seq_len: int, theta: float = 10000.0):
@@ -21,6 +23,7 @@ class RoPE(nn.Module):
         rotated_even = x_even * cos - x_odd * sin
         rotated_odd = x_even * sin + x_odd * cos
         return torch.stack((rotated_even, rotated_odd), dim=-1).flatten(-2)
+
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, model_dim: int, num_heads: int, head_dim: int, max_seq_len: int):
@@ -119,3 +122,17 @@ class GPT(nn.Module):
             target_seq.reshape(-1),
             reduction="none",
         )
+
+
+def build_model(device: torch.device) -> nn.Module:
+    model_max_seq_len = TRAINING.seq_len
+    model = GPT(
+        vocab_size=int(MODEL.vocab_size),
+        num_layers=int(MODEL.num_layers),
+        num_heads=int(MODEL.num_heads),
+        head_dim=int(MODEL.head_dim),
+        model_dim=int(MODEL.model_dim),
+        max_seq_len=model_max_seq_len,
+        mlp_ratio=int(MODEL.mlp_ratio),
+    ).to(device=device, dtype=torch.bfloat16)
+    return model

@@ -2,8 +2,8 @@ import math
 
 import torch
 
-from optim.core import NorMuonAndAdam
-from config import TRAINING, OPTIMIZER
+from src.optim.normuon import NorMuonAndAdam
+from src.config import TRAINING, OPTIMIZER
 
 
 def compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
@@ -39,7 +39,7 @@ def build_param_table(model, orth_mode: str) -> dict[str, dict]:
     return table
 
 
-def build_optimizer(model, *, orth_mode: str, lr_mul: float, polar_express) -> NorMuonAndAdam:
+def build_optimizer(model, *, orth_mode: str, polar_express) -> NorMuonAndAdam:
     param_table = build_param_table(model, orth_mode)
     work_order = list(param_table)
 
@@ -47,7 +47,7 @@ def build_optimizer(model, *, orth_mode: str, lr_mul: float, polar_express) -> N
     muon_cfg = OPTIMIZER.muon_defaults
     adam_defaults = dict(lr=adam_cfg.lr, eps=adam_cfg.eps, weight_decay=adam_cfg.weight_decay)
     normuon_defaults = dict(
-        lr=muon_cfg.lr * lr_mul,
+        lr=muon_cfg.lr * float(OPTIMIZER.lr_mul),
         momentum=muon_cfg.momentum,
         beta2=muon_cfg.beta2,
         weight_decay=muon_cfg.weight_decay,

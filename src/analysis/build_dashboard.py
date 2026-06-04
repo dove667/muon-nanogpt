@@ -6,7 +6,7 @@ import csv
 import html
 from pathlib import Path
 
-from src.utils import ROOT
+from src.paths import ROOT
 
 
 def esc(value: object) -> str:
