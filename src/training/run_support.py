@@ -2,25 +2,17 @@ import gc
 import json
 import math
 import random
-import subprocess
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 from torch import nn
 
-from data_pipeline import data_generator
+from data import data_generator
 from metrics import collect_spectral_metrics, current_grad_norm
-
-FIXED_BATCH_TOKENS = 8 * 2048 * 8
-FIXED_SEQ_LEN = 2048
-
-if TYPE_CHECKING:
-    from orthogonalization import OrthogonalizerConfig
-
+from config import TRAINING, MODEL
+from orth import OrthogonalizerConfig
 
 def setup_device(*, base_seed: int) -> torch.device:
     assert torch.cuda.is_available()
@@ -34,78 +26,34 @@ def setup_device(*, base_seed: int) -> torch.device:
 
     return device
 
-
-def nvidia_smi_output() -> str:
-    return subprocess.run(
-        ["nvidia-smi"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    ).stdout
-
-
-class RunLogger:
+class Logger:
     def __init__(
         self,
         *,
-        args,
-        orth_config: "OrthogonalizerConfig",
+        run_name: str,
+        seed: int,
         base_lr: float,
         train_token_budget: int,
-        eval_every_tokens: int,
-        grad_accum_steps: int,
-        device: torch.device,
-        seed: int,
-        seq_len: int,
+        orth_config: OrthogonalizerConfig,
         run_dir: Path,
-        run_name: str,
     ) -> None:
-        self.args = args
-        self.orth_mode = orth_config.orth_mode
-        self.orth_schedule_name = orth_config.schedule_name
         self.run_dir = run_dir
-        self.run_name = run_name
-
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.run_dir / "metrics.jsonl"
         self.config_file = self.run_dir / "config.json"
 
         run_config = {
-            **{
-                key: getattr(args, key)
-                for key in dir(args)
-                if not key.startswith("_") and not callable(getattr(args, key))
-            },
-            **orth_config.to_record(),
             "run_name": run_name,
-            "base_lr": base_lr,
-            "actual_lr": base_lr * orth_config.lr_mul,
             "seed": seed,
-            "model_size": "train_gpt_11L_768D",
-            "seq_len": seq_len,
-            "grad_accum": grad_accum_steps,
+            "base_lr": base_lr,
             "train_token_budget": train_token_budget,
-            "eval_every_tokens": eval_every_tokens,
-            "eval_tokens": args.val_tokens,
-            "torch_version": torch.__version__,
-            "cuda_version": torch.version.cuda,
-            "gpu_name": torch.cuda.get_device_name(device),
+            **orth_config.to_record(),
         }
         self.config_file.write_text(json.dumps(run_config, indent=2, sort_keys=True), encoding="utf-8")
 
-    def _with_common_fields(self, record: dict, step_value: int | None = None) -> dict:
-        payload = dict(record)
-        payload.setdefault("run/name", self.run_name)
-        payload.setdefault("orthogonalizer/type", self.orth_mode)
-        payload.setdefault("orthogonalizer/schedule_name", self.orth_schedule_name)
-        if step_value is not None:
-            payload.setdefault("train/step", int(step_value))
-        return payload
-
-    def log_metric(self, record: dict, step_value: int | None = None) -> None:
-        payload = self._with_common_fields(record, step_value=step_value)
+    def log_metric(self, record: dict) -> None:
         with self.metrics_file.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     def log_spectral(self, summary_record: dict) -> None:
         if summary_record:
@@ -116,9 +64,12 @@ def run_validation(
     *,
     model: nn.Module,
     training_manager,
-    args,
+    val_files: str,
+    val_tokens: int,
+    val_batch_size: int,
+    bigram_vocab_size: int,
     grad_accum_steps: int,
-    logger: RunLogger,
+    logger: Logger,
     step: int,
     train_steps: int,
     training_time_ms: float,
@@ -126,11 +77,11 @@ def run_validation(
 ) -> None:
     eval_start_time = time.perf_counter()
     model.eval()
-    assert args.val_tokens % args.val_batch_size == 0
-    val_steps = grad_accum_steps * args.val_tokens // args.val_batch_size
+    assert val_tokens % val_batch_size == 0
+    val_steps = grad_accum_steps * val_tokens // val_batch_size
     val_loader = data_generator(
-        args.val_files, args.val_batch_size, -1, grad_accum_steps,
-        False, args.bigram_vocab_size,
+        val_files, val_batch_size, -1, grad_accum_steps,
+        False, bigram_vocab_size,
     )
     val_loss = torch.tensor(0.0, device=training_manager.device)
     with torch.no_grad():
@@ -149,10 +100,10 @@ def run_validation(
     logger.log_metric(
         {
             "val/loss": float(val_loss),
-            "val/ppl": float(math.exp(min(float(val_loss), 20.0))),
-            "val/tokens": int(args.val_tokens),
+            "val/ppl": float(math.exp(min(float(val_loss), TRAINING.val_ppl_clip))),
+            "val/tokens": int(val_tokens),
             "val/time_s": float(eval_time_s),
-            "val/tokens_per_sec": float(args.val_tokens / max(eval_time_s, 1e-9)),
+            "val/tokens_per_sec": float(val_tokens / max(eval_time_s, 1e-9)),
             "val/global_train_tokens": int(training_manager.global_train_tokens),
             "val/global_wall_time_s": float(time.perf_counter() - wall_start_time),
             "train/time_s": float(training_time_ms / 1000),
@@ -160,7 +111,6 @@ def run_validation(
             "train/step": int(step),
             "wall/elapsed_s": float(time.perf_counter() - wall_start_time),
         },
-        step_value=step,
     )
     model.train()
 
@@ -169,13 +119,18 @@ def run_training_loop(
     *,
     model: nn.Module,
     training_manager,
-    args,
+    train_files: str,
+    val_files: str,
+    val_tokens: int,
+    val_batch_size: int,
+    bigram_vocab_size: int,
     train_steps: int,
     grad_accum_steps: int,
-    logger: RunLogger,
+    logger: Logger,
     log_every_steps: int,
     eval_every_tokens: int,
     eval_at_start: bool,
+    val_loss_every: int,
     spectral_every_tokens: int,
     spectral_max_matrices: int,
     spectral_max_dim: int,
@@ -183,8 +138,8 @@ def run_training_loop(
     orth_norm_factor: float,
 ) -> None:
     train_loader = data_generator(
-        args.train_files, FIXED_BATCH_TOKENS, FIXED_SEQ_LEN,
-        grad_accum_steps, True, args.bigram_vocab_size,
+        train_files, TRAINING.batch_tokens, TRAINING.seq_len,
+        grad_accum_steps, True, bigram_vocab_size,
     )
     gc.collect()
 
@@ -204,14 +159,23 @@ def run_training_loop(
             eval_every_tokens > 0
             and training_manager.global_train_tokens >= next_eval_tokens
         )
-        should_eval_by_steps = args.val_loss_every > 0 and step % args.val_loss_every == 0
+        should_eval_by_steps = val_loss_every > 0 and step % val_loss_every == 0
         if last_step or should_eval_by_tokens or should_eval_by_steps:
             torch.cuda.synchronize()
             training_time_ms += 1000 * (time.perf_counter() - t0)
             run_validation(
-                model=model, training_manager=training_manager, args=args,
-                grad_accum_steps=grad_accum_steps, logger=logger, step=step, train_steps=train_steps,
-                training_time_ms=training_time_ms, wall_start_time=wall_start_time,
+                model=model,
+                training_manager=training_manager,
+                val_files=val_files,
+                val_tokens=val_tokens,
+                val_batch_size=val_batch_size,
+                bigram_vocab_size=bigram_vocab_size,
+                grad_accum_steps=grad_accum_steps,
+                logger=logger,
+                step=step,
+                train_steps=train_steps,
+                training_time_ms=training_time_ms,
+                wall_start_time=wall_start_time,
             )
             if eval_every_tokens > 0:
                 while next_eval_tokens <= training_manager.global_train_tokens:
@@ -250,7 +214,7 @@ def run_training_loop(
             torch.cuda.synchronize()
 
         training_manager.step_optimizers(step)
-        training_manager.global_train_tokens += FIXED_BATCH_TOKENS
+        training_manager.global_train_tokens += TRAINING.batch_tokens
 
         if should_log:
             torch.cuda.synchronize()
@@ -274,13 +238,12 @@ def run_training_loop(
                     "train/lr": float(_primary_train_lr_float(training_manager)),
                     "train/tokens": int(training_manager.global_train_tokens),
                     "train/step": int(step + 1),
-                    "train/throughput_tokens_per_sec": float(FIXED_BATCH_TOKENS / step_wall_s),
+                    "train/throughput_tokens_per_sec": float(TRAINING.batch_tokens / step_wall_s),
                     "train/step_time_ms": float(step_wall_ms),
                     "train/grad_norm": float(grad_norm_value),
                     "train/total_time_s": float(train_time_s),
                     "wall/elapsed_s": float(time.perf_counter() - wall_start_time),
                 },
-                step_value=step + 1,
             )
 
         if (
@@ -309,7 +272,6 @@ def run_training_loop(
             "wall/final_elapsed_s": float(time.perf_counter() - wall_start_time),
             "status": "completed",
         },
-        step_value=train_steps,
     )
     print(
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "

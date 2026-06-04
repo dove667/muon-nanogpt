@@ -1,0 +1,125 @@
+# Fixed experiment config — shared across all runs.
+
+training:
+  batch_tokens: 131072          # 8 * 2048 * 8
+  seq_len: 2048
+  grad_accum_steps: 16
+  warmup_frac: 0.10
+  min_lr_frac: 0.10
+  val_ppl_clip: 20.0
+
+  # Controlled experiment variables
+  train_token_budget: 100_000_000
+  eval_every_tokens: 2_000_000
+  eval_tokens: 524_288
+  eval_batch_size: null         # auto-computed from seq_len * grad_accum if null
+  eval_at_start: false
+  log_every_steps: 20
+  val_loss_every: 0             # 0 = disabled; step-based validation interval
+
+  model_max_seq_len: 0          # 0 = auto-compute from val_batch_size or seq_len
+
+  spectral_every_tokens: 10_000_000
+  spectral_max_matrices: 5
+  spectral_max_dim: 1024
+
+model:
+  bigram_vocab_size: 251520    # 50304 * 5
+  block_size: 128
+  window_sizes: [3, 7]         # in blocks → effective 384, 896
+  mtp_weights: [1.0, 0.0]      # multi-token prediction head weights
+
+optimizer:
+  adam_step_interval: 2         # Adam updates every N steps (1 = every step)
+  lr_mul: 1.0                   # global LR multiplier for muon params
+
+  base_lr_adamw: 0.008
+  adam_defaults:
+    lr: 0.008
+    eps: 1.0e-10
+    weight_decay: 0.005
+
+  base_lr_muon: 0.023
+  muon_defaults:
+    lr: 0.023
+    momentum: 0.95
+    beta2: 0.9
+    weight_decay: 1.2
+
+  param_table:
+    scalars:
+      optim: adam
+      adam_betas: [0.9, 0.99]
+      lr_mul: 5.0
+      wd_mul: 0.0
+    smear_gate:
+      optim: adam
+      adam_betas: [0.9, 0.99]
+      lr_mul: 0.01
+      wd_mul: 0.0
+    skip_gate:
+      optim: adam
+      adam_betas: [0.9, 0.99]
+      lr_mul: 0.05
+      wd_mul: 0.0
+    attn_gate_bank:
+      optim: adam
+      adam_betas: [0.9, 0.99]
+    ve_gate_bank:
+      optim: adam
+      adam_betas: [0.9, 0.99]
+    lm_head:
+      optim: adam
+      adam_betas: [0.5, 0.95]
+      wd_mul: 150.0
+    embed:
+      optim: adam
+      adam_betas: [0.5, 0.95]
+      wd_mul: 150.0
+    bigram_embed:
+      optim: adam
+      adam_betas: [0.75, 0.95]
+      lr_mul: 75.0
+      wd_mul: 5.0
+    value_embeds:
+      optim: adam
+      adam_betas: [0.75, 0.95]
+      lr_mul: 75.0
+      wd_mul: 5.0
+    post_lambdas:
+      optim: adam
+      adam_betas: [0.9, 0.95]
+      lr_mul: 1.0
+      wd_mul: 0.0
+    x0_lambdas:
+      optim: adam
+      adam_betas: [0.9, 0.95]
+      lr_mul: 1.0
+      wd_mul: 0.0
+    bigram_lambdas:
+      optim: adam
+      adam_betas: [0.9, 0.95]
+      lr_mul: 1.0
+      wd_mul: 0.0
+    resid_lambdas:
+      optim: adam
+      adam_betas: [0.9, 0.95]
+      lr_mul: 5.0
+      wd_mul: 0.0
+    qk_bank:
+      optim: normuon
+    vo_bank:
+      optim: normuon
+    mlp_bank:
+      optim: normuon
+
+orthogonalization:
+  default_iterations: 5
+  ns_iterations: 5              # Newton-Schulz iterations for vanilla/fast/polar_express
+
+  fast_steps: 5                 # manual mode default
+  stable_steps: 0               # manual mode default
+
+  pe_lower_bound: "1e-3"
+  pe_cushion: 0.02
+  pe_safety_factor: 0.02

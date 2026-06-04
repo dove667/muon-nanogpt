@@ -2,116 +2,56 @@
 
 ## 环境
 
-默认实验环境是 RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。162M 模型在单卡上完全够用。
+RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。162M 模型在单卡上完全够用，无分布式逻辑。
 
 数据路径按实际位置设置，以下示例中用 `/data/fineweb10B` 代替。
 
-## 1. 单次训练（`python src/training/train.py`）
+## 配置
+
+所有固定超参数集中在项目根 `config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 4 个参数。
+
+## 1. 单次训练
 
 ```bash
-python src/training/train.py \
-  --orth vanilla \
-  --name smoke_test \
-  --lr-mul 1.0 \
-  --train-token-budget 2000000 \
-  --eval-every-tokens 500000 \
-  --eval-tokens 131072 \
-  --data-path /data/fineweb10B \
-  --wandb off
+python src/training/train.py --orth fast --seed 0 --data-path /data/fineweb10B
 ```
 
-如需多卡分布式，手动 `torchrun` 启动。
-
-使用 Manual、Fast、AdamW 或 Polar Express 时可这样切换：
+指定运行名称（不指定则自动生成）：
 
 ```bash
-# Manual：5 步中前 3 步快速、后 2 步稳定
-python src/training/train.py --orth manual --fast-steps 3 --stable-steps 2 ...
+python src/training/train.py --orth vanilla --seed 1 --name my_run --data-path /data/fineweb10B
+```
 
-# Fast：5 步全 fast 系数
-python src/training/train.py --orth fast ...
+五种 orth 模式：
 
-# AdamW baseline：矩阵参数不做 Muon 正交化
-python src/training/train.py --orth adamw ...
-
-# Polar Express：奇异值下界 1e-3
-python src/training/train.py --orth polar_express --pe-lower-bound 1e-3 ...
+```bash
+python src/training/train.py --orth adamw         --seed 0 --data-path /data/fineweb10B
+python src/training/train.py --orth vanilla       --seed 0 --data-path /data/fineweb10B
+python src/training/train.py --orth fast          --seed 0 --data-path /data/fineweb10B
+python src/training/train.py --orth manual        --seed 0 --data-path /data/fineweb10B
+python src/training/train.py --orth polar_express --seed 0 --data-path /data/fineweb10B
 ```
 
 ### 参数
 
-#### 核心参数
-
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `--orth` | str | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
-| `--name` | str | `$WANDB_NAME` / `$RUN_NAME` | 运行名称，同时也是输出目录名 |
-| `--lr-mul` | float | `1.0` | 学习率倍率 |
 | `--seed` | int | `0` | 随机种子 |
-| `--train-token-budget` | int | `100000000` | 训练 token 预算 |
-| `--eval-every-tokens` | int | `2000000` | 验证间隔（token 数） |
-| `--eval-tokens` | int | `524288` | 每次验证的 token 数 |
-| `--data-path` | str | — | 数据集根目录 |
+| `--name` | str | 自动生成 | 运行名称（输出目录名） |
+| `--data-path` | str | **必传** | 数据集根目录 |
 
-#### Manual 模式专属参数
+所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `config.yaml` 中管理。
 
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--fast-steps` | int | `5` | 快速系数步数 |
-| `--stable-steps` | int | `0` | 稳定系数步数（须满足 fast_steps + stable_steps = 5） |
+## 2. 完整实验计划
 
-#### Polar Express 模式专属参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--pe-lower-bound` | str | `1e-3` | 奇异值下界 |
-| `--pe-cushion` | float | `2e-2` | cushion 参数 |
-| `--pe-safety-factor` | float | `2e-2` | 安全因子 |
-
-#### 训练控制
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--train-grad-accum-steps` | int | `16` | 梯度累积步数 |
-| `--eval-batch-size` | int | — | 验证批次大小（None 时自动计算） |
-| `--eval-at-start` | flag | False | 训练开始前先做一次验证 |
-| `--log-every-steps` | int | `20` | 训练指标日志间隔（步数） |
-| `--model-max-seq-len` | int | `0` | 最大序列长度（0 使用默认 2048） |
-
-#### 日志与 W&B
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--wandb` | str | `on` | W&B 开关：`on` / `off` |
-| `--wandb-project` | str | `muon-nanogpt` | W&B 项目名 |
-| `--wandb-entity` | str | — | W&B entity 名 |
-| `--wandb-mode` | str | — | W&B 模式（如 `offline`、`dryrun`） |
-| `--runs-root` | str | `runs` | 运行输出根目录 |
-
-#### 谱分析
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--spectral-every-tokens` | int | `10000000` | 谱分析间隔（token 数） |
-| `--spectral-max-matrices` | int | `5` | 谱分析最大矩阵数 |
-| `--spectral-max-dim` | int | `1024` | 谱分析最大维度 |
-
-#### 分布式
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--nproc-per-node` | int | `1` | 每节点进程数（torchrun 用） |
-
-## 2. 完整实验计划（`python -m src.experiment_plan`）
-
-实验计划详见 [`docs/experiments.md`](experiments.md)。当前入口为固定 5 配置 × 3 seeds = 15 runs：
+固定 5 配置 × 3 seeds = 15 runs：
 
 ```bash
-# 基础运行
 python -m src.experiment_plan --data-path /data/fineweb10B
 ```
 
-跳过已完成轮次（断点续跑）：
+跳过已完成轮次：
 
 ```bash
 python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
@@ -121,68 +61,42 @@ python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
+| `--data-path` | str | **必传** | 数据集根目录 |
 | `--skip-completed-runs` | flag | False | 跳过已完成的运行 |
-| `--train-token-budget` | int | `100000000` | 训练 token 预算 |
-| `--eval-every-tokens` | int | `2000000` | 验证间隔（token 数） |
-| `--eval-tokens` | int | `524288` | 每次验证的 token 数 |
-| `--train-grad-accum-steps` | int | `16` | 梯度累积步数 |
-| `--eval-batch-size` | int | — | 验证批次大小 |
-| `--eval-at-start` | flag | False | 训练开始前先做一次验证 |
-| `--log-every-steps` | int | `20` | 训练指标日志间隔（步数） |
-| `--wandb` | str | `on` | W&B 开关：`on` / `off` |
-| `--wandb-project` | str | `muon-nanogpt` | W&B 项目名 |
-| `--wandb-entity` | str | — | W&B entity 名 |
-| `--wandb-mode` | str | — | W&B 模式（如 `offline`、`dryrun`） |
+
 ## 3. 分析报告
 
-### 3.1 汇总 CSV（`python -m src.analysis.summarize_runs`）
+### 汇总 CSV
 
 ```bash
-# 汇总为 run-level / config-level CSV
-python -m src.analysis.summarize_runs --runs-dir runs --out-dir results --print-top 12
+python -m src.analysis.summarize_runs
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--runs-dir` | str | `runs` | 读取运行数据的目录 |
-| `--out-dir` | str | `results` | 输出 CSV 的目录 |
-| `--print-top` | int | `0` | 打印 Top-N 运行终端摘要（0 表示不打印） |
-| `--allow-empty` | flag | False | 允许目录为空时继续（不报错退出） |
+输出：`results/run_summary.csv` + `results/orth_summary.csv`
 
-### 3.2 曲线图（`python -m src.analysis.plot_curves`）
+### 曲线图
 
 ```bash
-# 生成曲线图
-python -m src.analysis.plot_curves --runs-dir runs --out-dir results/figures
+python -m src.analysis.plot_curves
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--runs-dir` | str | `runs` | 读取运行数据的目录 |
-| `--out-dir` | str | `results/figures` | 输出图表的目录 |
-| `--orths` | str[] | — | 只绘制指定 orth 类型的曲线（不指定则全部绘制） |
+输出：`results/figures/` 下 7 张 PNG
 
-### 3.3 仪表板（`python -m src.analysis.build_dashboard`）
+### 仪表板
 
 ```bash
-# 构建交互式仪表板
-python -m src.analysis.build_dashboard --analysis-dir results --out results/dashboard.html
+python -m src.analysis.build_dashboard
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--analysis-dir` | str | `results` | 读取分析 CSV 的目录 |
-| `--out` | str | `results/dashboard.html` | 输出 HTML 文件路径 |
+输出：`results/dashboard.html`
 
 ## 运行产物
-
-验证数据默认来自 `DATA_PATH` 下匹配 `fineweb_val_*.bin` 的 shard；训练数据对应 `fineweb_train_*.bin`。
 
 每轮训练输出到 `runs/<name>/`：
 
 | 文件 | 内容 |
 |---|---|
-| `config.json` | 完整配置快照 |
+| `config.json` | 实验配置快照（run_name、seed、base_lr、train_token_budget、orth_config） |
 | `metrics.jsonl` | 每步一条 JSON（训练指标、验证指标、谱指标） |
 
 分析脚本读取 `runs/` 并输出到 `results/`：
@@ -194,6 +108,6 @@ python -m src.analysis.build_dashboard --analysis-dir results --out results/dash
 
 ## 注意
 
-- `train.py` 现在既是单次训练入口，也是多卡 launcher；它仍然依赖脚本级相对导入（如 `import polar`），**不要改为包导入**。
-- `5090_results/` 是之前硬件的存档输出，**请勿修改**。
-- 固定实验栈默认使用 `seq_len=2048`、`batch=8*2048*8`、`grad_accum=16`、`window=(3,7)` 与 warmup+cosine LR。
+- `5090_results/` 是历史存档，**禁止修改**
+- 数据格式：FineWeb-10B 预分词 BOS 对齐 shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
+- 固定训练栈详见 `config.yaml`

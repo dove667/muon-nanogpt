@@ -6,7 +6,7 @@
 
 ## 系统环境
 
-- 4× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121
+- 1× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121
 - FineWeb-10B 数据集
 
 ## 环境搭建

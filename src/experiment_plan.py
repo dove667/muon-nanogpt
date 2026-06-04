@@ -6,14 +6,6 @@ from pathlib import Path
 
 from src.utils import ROOT, RUNS_ROOT
 
-
-DEFAULT_TRAIN_TOKEN_BUDGET = 100_000_000
-DEFAULT_EVAL_EVERY_TOKENS = 2_000_000
-DEFAULT_EVAL_TOKENS = 524_288
-DEFAULT_TRAIN_GRAD_ACCUM_STEPS = 16
-DEFAULT_SPECTRAL_EVERY_TOKENS = 10_000_000
-DEFAULT_SPECTRAL_MAX_MATRICES = 5
-DEFAULT_SPECTRAL_MAX_DIM = 1024
 SEEDS = (0, 1, 2)
 TRAINER_PY = (ROOT / "src" / "training" / "train.py").resolve()
 
@@ -21,36 +13,21 @@ TRAINER_PY = (ROOT / "src" / "training" / "train.py").resolve()
 @dataclass(frozen=True)
 class RunSpec:
     orth: str
-    name: str
-    lr_mul: float = 1.0
-    seed: int = 0
-    train_token_budget: int = DEFAULT_TRAIN_TOKEN_BUDGET
-    eval_every_tokens: int = DEFAULT_EVAL_EVERY_TOKENS
-    eval_tokens: int = DEFAULT_EVAL_TOKENS
-    fast_steps: int | None = None
-    stable_steps: int | None = None
-    pe_lower_bound: str | None = None
+    seed: int
 
-    def to_cli_args(self) -> list[str]:
-        args = [
-            "--orth", self.orth,
-            "--name", self.name,
-            "--lr-mul", str(self.lr_mul),
-            "--seed", str(self.seed),
-            "--train-token-budget", str(self.train_token_budget),
-            "--eval-every-tokens", str(self.eval_every_tokens),
-            "--eval-tokens", str(self.eval_tokens),
-        ]
+    @property
+    def name(self) -> str:
+        if self.orth == "adamw":
+            return f"adamw_seed{self.seed}"
+        if self.orth == "vanilla":
+            return f"vanilla_seed{self.seed}"
+        if self.orth == "fast":
+            return f"fast_seed{self.seed}"
         if self.orth == "manual":
-            args.extend([
-                "--fast-steps", str(self.fast_steps),
-                "--stable-steps", str(self.stable_steps),
-            ])
-        elif self.orth == "polar_express":
-            args.extend([
-                "--pe-lower-bound", str(self.pe_lower_bound),
-            ])
-        return args
+            return f"manual_seed{self.seed}"
+        if self.orth == "polar_express":
+            return f"polar_express_seed{self.seed}"
+        raise SystemExit(f"Unknown orth={self.orth}")
 
 
 def run_completed(name: str) -> bool:
@@ -61,93 +38,49 @@ def run_completed(name: str) -> bool:
     return '"status": "completed"' in last_line or '"status":"completed"' in last_line
 
 
-def build_run_specs(
-    *,
-    train_token_budget: int,
-    eval_every_tokens: int,
-    eval_tokens: int,
-) -> list[RunSpec]:
+def build_run_specs() -> list[RunSpec]:
     specs: list[RunSpec] = []
     for seed in SEEDS:
         specs.extend([
-            RunSpec("adamw", f"adamw_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
-            RunSpec("vanilla", f"vanilla_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
-            RunSpec("manual", f"manual_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, fast_steps=3, stable_steps=2),
-            RunSpec("fast", f"fast_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens),
-            RunSpec("polar_express", f"polar_express_seed{seed}", seed=seed, train_token_budget=train_token_budget, eval_every_tokens=eval_every_tokens, eval_tokens=eval_tokens, pe_lower_bound="1e-3"),
+            RunSpec("adamw", seed),
+            RunSpec("vanilla", seed),
+            RunSpec("manual", seed),
+            RunSpec("fast", seed),
+            RunSpec("polar_express", seed),
         ])
     return specs
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the fixed 15-run experiment plan.")
+    parser.add_argument("--data-path", required=True,
+                        help="Path to training data directory")
     parser.add_argument("--skip-completed-runs", action="store_true",
                         help="Skip runs that have already completed")
-
-    parser.add_argument("--train-token-budget", type=int, default=DEFAULT_TRAIN_TOKEN_BUDGET,
-                        help="Total token budget for training")
-    parser.add_argument("--eval-every-tokens", type=int, default=DEFAULT_EVAL_EVERY_TOKENS,
-                        help="Run evaluation every N tokens")
-    parser.add_argument("--eval-tokens", type=int, default=DEFAULT_EVAL_TOKENS,
-                        help="Number of tokens per evaluation step")
-    parser.add_argument("--train-grad-accum-steps", type=int, default=DEFAULT_TRAIN_GRAD_ACCUM_STEPS,
-                        help="Gradient accumulation steps for training")
-    parser.add_argument("--eval-batch-size", type=int, default=None,
-                        help="Batch size for evaluation")
-    parser.add_argument("--eval-at-start", action="store_true",
-                        help="Run evaluation at the start of training")
-    parser.add_argument("--log-every-steps", type=int, default=20,
-                        help="Log training metrics every N steps")
-
-    parser.add_argument("--data-path",
-                        help="Path to training data directory")
-    parser.add_argument("--model-max-seq-len", type=int, default=0,
-                        help="Maximum sequence length for the model (0 for default)")
-    
-    parser.add_argument("--spectral-every-tokens", type=int, default=DEFAULT_SPECTRAL_EVERY_TOKENS,
-                        help="Run spectral analysis every N tokens")
-    parser.add_argument("--spectral-max-matrices", type=int, default=DEFAULT_SPECTRAL_MAX_MATRICES,
-                        help="Maximum number of matrices for spectral analysis")
-    parser.add_argument("--spectral-max-dim", type=int, default=DEFAULT_SPECTRAL_MAX_DIM,
-                        help="Maximum dimension for spectral analysis")
     return parser.parse_args()
 
 
-def launch(spec: RunSpec, args: argparse.Namespace) -> None:
-    if args.skip_completed_runs and run_completed(spec.name):
+def launch(spec: RunSpec, data_path: str, skip_completed: bool) -> None:
+    if skip_completed and run_completed(spec.name):
         print("=" * 80)
         print(f"skip completed: {spec.name}")
         print("=" * 80)
         return
 
-    command = [sys.executable, str(TRAINER_PY), *spec.to_cli_args()]
-    command.extend([
-        "--train-grad-accum-steps", str(args.train_grad_accum_steps),
-        "--log-every-steps", str(args.log_every_steps),
-        "--spectral-every-tokens", str(args.spectral_every_tokens),
-        "--spectral-max-matrices", str(args.spectral_max_matrices),
-        "--spectral-max-dim", str(args.spectral_max_dim),
-    ])
-    if args.eval_batch_size is not None:
-        command.extend(["--eval-batch-size", str(args.eval_batch_size)])
-    if args.eval_at_start:
-        command.append("--eval-at-start")
-    if args.data_path:
-        command.extend(["--data-path", args.data_path])
-    if args.model_max_seq_len > 0:
-        command.extend(["--model-max-seq-len", str(args.model_max_seq_len)])
+    command = [
+        sys.executable, str(TRAINER_PY),
+        "--orth", spec.orth,
+        "--seed", str(spec.seed),
+        "--data-path", data_path,
+    ]
     subprocess.run(command, cwd=ROOT, check=True)
 
 
 def main() -> int:
     args = parse_args()
-    specs = build_run_specs(
-        train_token_budget=args.train_token_budget,
-        eval_every_tokens=args.eval_every_tokens,
-        eval_tokens=args.eval_tokens,
-    )
+    specs = build_run_specs()
     for spec in specs:
-        launch(spec, args)
+        launch(spec, args.data_path, args.skip_completed_runs)
     return 0
 
 
