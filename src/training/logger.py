@@ -23,7 +23,7 @@ class Logger:
             "seed": seed,
             "base_lr": base_lr,
             "train_token_budget": int(TRAINING.train_token_budget),
-            "batch_tokens": int(TRAINING.batch_tokens),
+            "tokens_per_step": int(TRAINING.tokens_per_step),
             "seq_len": int(TRAINING.seq_len),
             "grad_accum_steps": int(TRAINING.grad_accum_steps),
             **orth_record,

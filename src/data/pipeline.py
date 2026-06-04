@@ -18,16 +18,16 @@ def load_data_shard(file: Path) -> Tensor:
     return tokens
 
 
-def data_generator(filename_pattern: str, num_tokens: int, seq_len: int, grad_accum_steps: int):
+def data_generator(filename_pattern: str, tokens_per_step: int, seq_len: int, grad_accum_steps: int):
     if seq_len <= 0:
         raise ValueError("seq_len must be positive")
-    if num_tokens % grad_accum_steps != 0:
-        raise ValueError("num_tokens must be divisible by grad_accum_steps")
+    if tokens_per_step % grad_accum_steps != 0:
+        raise ValueError("tokens_per_step must be divisible by grad_accum_steps")
 
-    microbatch_tokens = num_tokens // grad_accum_steps
-    if microbatch_tokens % seq_len != 0:
-        raise ValueError("microbatch tokens must be divisible by seq_len")
-    batch_size = microbatch_tokens // seq_len
+    tokens_per_microbatch = tokens_per_step // grad_accum_steps
+    if tokens_per_microbatch % seq_len != 0:
+        raise ValueError("tokens_per_microbatch must be divisible by seq_len")
+    sequences_per_microbatch = tokens_per_microbatch // seq_len
 
     files = [Path(file) for file in sorted(glob.glob(filename_pattern))]
     if not files:
@@ -53,21 +53,10 @@ def data_generator(filename_pattern: str, num_tokens: int, seq_len: int, grad_ac
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
     while True:
-        buf = next_token_block(microbatch_tokens + batch_size)
-        inputs = buf[:-batch_size].view(batch_size, seq_len).to(dtype=torch.int64)
-        targets = buf[1:].view(batch_size, seq_len).to(dtype=torch.int64)
-
-        new_params = yield (
+        buf = next_token_block(tokens_per_microbatch + sequences_per_microbatch)
+        inputs = buf[:-sequences_per_microbatch].view(sequences_per_microbatch, seq_len).to(dtype=torch.int64)
+        targets = buf[1:].view(sequences_per_microbatch, seq_len).to(dtype=torch.int64)
+        yield (
             inputs.to(device="cuda", non_blocking=True),
             targets.to(device="cuda", non_blocking=True),
         )
-
-        if new_params is not None:
-            new_num_tokens, new_seq_len, new_grad_accum_steps = new_params
-            if new_num_tokens % new_grad_accum_steps != 0:
-                raise ValueError("updated num_tokens must be divisible by grad_accum_steps")
-            microbatch_tokens = new_num_tokens // new_grad_accum_steps
-            if microbatch_tokens % new_seq_len != 0:
-                raise ValueError("updated microbatch tokens must be divisible by seq_len")
-            seq_len = new_seq_len
-            batch_size = microbatch_tokens // seq_len

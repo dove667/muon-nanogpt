@@ -14,10 +14,10 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 
 - 标准 11 层 prenorm Transformer，`model_dim=768`，`num_heads=6`，`head_dim=128`
 - `seq_len=2048`
-- `batch_tokens=131072`
+- `tokens_per_step=131072`
 - `grad_accum_steps=16`
 - `train_token_budget=100M`
-- `eval_every_tokens=2M`
+- `eval_interval_tokens=2M`
 - `eval_tokens=524288`
 - LR 为 10% warmup + cosine decay 到峰值 10%
 
@@ -44,31 +44,14 @@ python -m src.training.train --orth polar_express --seed 0 --data-path /data/fin
 | `--orth` | str | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
 | `--seed` | int | `0` | 随机种子 |
 | `--data-path` | str | **必传** | 数据集根目录 |
+| `--benchmark` | flag | False | 开启 wall-clock 计时（含 cuda synchronize） |
+| `--spectral` | flag | False | 采集优化器状态频谱指标 |
+
+默认模式下训练循环无 `torch.cuda.synchronize()` 开销。`--benchmark` 和 `--spectral` 应分开跑。
 
 所有其他参数（训练预算、batch、seq_len、LR、正交化细节等）均在 `src/config/config.yaml` 中管理。
 
-## 2. 完整实验计划
-
-固定 5 配置 × 3 seeds = 15 runs：
-
-```bash
-python -m src.experiment_plan --data-path /data/fineweb10B
-```
-
-跳过已完成轮次：
-
-```bash
-python -m src.experiment_plan --data-path /data/fineweb10B --skip-completed-runs
-```
-
-### 参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `--data-path` | str | **必传** | 数据集根目录 |
-| `--skip-completed-runs` | flag | False | 跳过已完成的运行 |
-
-## 3. 分析报告
+## 2. 分析报告
 
 ### 汇总 CSV
 
@@ -94,7 +77,7 @@ python -m src.analysis.build_dashboard
 
 输出：`results/dashboard.html`
 
-## 4. 数据下载
+## 3. 数据下载
 
 ```bash
 python scripts/download_fineweb.py [num_chunks]

@@ -7,16 +7,16 @@
 
 ## 训练入口
 
-- 单次训练：`python -m src.training.train --orth <mode> --seed <n> --data-path /data/fineweb10B`
-- 完整实验（5 配置 × 3 seeds = 15 runs）：`python -m src.experiment_plan --data-path /data/fineweb10B [--skip-completed-runs]`
+- 单次训练（纯训练模式，无额外同步开销）：`python -m src.training.train --orth <mode> --seed <n> --data-path /data/fineweb10B`
+- BenchMark 模式（测量 wall-clock 吞吐）：`python -m src.training.train ... --benchmark`
+- 谱分析模式（采集优化器状态频谱）：`python -m src.training.train ... --spectral`
 - 162M 模型 4090 单卡完全够用，无分布式逻辑
-- 并行跑多个独立实验用 `CUDA_VISIBLE_DEVICES=0 python ...`
 
 ## 配置管理
 
 - **`src/config/config.yaml`** 是唯一配置来源，包含所有固定训练/模型/优化器/正交化超参数
 - `src/config/` 负责 YAML 加载，导出 `TRAINING` `MODEL` `OPTIMIZER` 模块级常量
-- train.py CLI 仅暴露必须变化的 3 个参数：`--data-path` `--orth` `--seed`
+- train.py CLI 仅暴露必须变化的 3 个参数：`--data-path` `--orth` `--seed`，外加 `--benchmark` / `--spectral` 控制诊断模式
 
 ## 五种 orth 模式
 
@@ -63,7 +63,6 @@ src/
 │   ├── build_dashboard.py       # → results/dashboard.html
 │   ├── ns_coefficients.py       # Neville-Simpson 系数分析
 │   └── __init__.py
-└── experiment_plan.py           # 多 run 编排
 ```
 
 数据下载脚本独立存放：`scripts/download_fineweb.py`

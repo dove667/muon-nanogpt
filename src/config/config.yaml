@@ -1,22 +1,22 @@
 # Fixed experiment config — shared across all runs.
 
 training:
-  batch_tokens: 131072          # 8 * 2048 * 8
+  tokens_per_step: 131072        # total tokens per optimizer step
   seq_len: 2048
   grad_accum_steps: 16
   warmup_frac: 0.10
   min_lr_frac: 0.10
-  val_ppl_clip: 20.0
+  val_ppl_max: 20.0
 
   # Controlled experiment variables
   train_token_budget: 100_000_000
-  eval_every_tokens: 2_000_000
+  eval_interval_tokens: 2_000_000
   eval_tokens: 524_288
   log_every_steps: 20
 
-  spectral_every_tokens: 10_000_000
-  spectral_max_matrices: 5
-  spectral_max_dim: 1024
+  spectral_interval_tokens: 10_000_000
+  spectral_num_matrices: 5
+  spectral_dim_cap: 1024
 
 model:
   vocab_size: 50257

@@ -44,3 +44,10 @@ def resolve_data_path(data_path: str) -> tuple[str, str]:
     if not any(dp.glob(val_pattern)):
         raise FileNotFoundError(f"No validation files matching {val_pattern} in {dp}")
     return str(dp / train_pattern), str(dp / val_pattern)
+
+
+def primary_lr(optimizer) -> float:
+    for param_cfg in optimizer.param_cfgs.values():
+        if param_cfg.optim == "normuon":
+            return float(param_cfg.lr * param_cfg.lr_mul)
+    return float("nan")

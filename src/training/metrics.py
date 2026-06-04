@@ -14,23 +14,23 @@ def current_grad_norm(model: nn.Module) -> float:
     return math.sqrt(total)
 
 
-def downsample_matrix_for_svd(mat: torch.Tensor, spectral_max_dim: int) -> torch.Tensor:
+def downsample_matrix_for_svd(mat: torch.Tensor, svd_dim_cap: int) -> torch.Tensor:
     mat = mat.detach().float()
-    if spectral_max_dim <= 0:
+    if svd_dim_cap <= 0:
         return mat
     rows, cols = mat.shape[-2], mat.shape[-1]
-    if rows > spectral_max_dim:
-        row_idx = torch.linspace(0, rows - 1, spectral_max_dim, device=mat.device).round().long()
+    if rows > svd_dim_cap:
+        row_idx = torch.linspace(0, rows - 1, svd_dim_cap, device=mat.device).round().long()
         mat = mat.index_select(-2, row_idx)
-    if cols > spectral_max_dim:
-        col_idx = torch.linspace(0, cols - 1, spectral_max_dim, device=mat.device).round().long()
+    if cols > svd_dim_cap:
+        col_idx = torch.linspace(0, cols - 1, svd_dim_cap, device=mat.device).round().long()
         mat = mat.index_select(-1, col_idx)
     return mat
 
 
 @torch.no_grad()
-def orthogonalized_copy_for_stats(mat: torch.Tensor, coeffs: list[tuple[float, float, float]], norm_factor: float, spectral_max_dim: int) -> torch.Tensor:
-    x = downsample_matrix_for_svd(mat, spectral_max_dim)
+def orthogonalized_copy_for_stats(mat: torch.Tensor, coeffs: list[tuple[float, float, float]], norm_factor: float, svd_dim_cap: int) -> torch.Tensor:
+    x = downsample_matrix_for_svd(mat, svd_dim_cap)
     x = x / (x.norm(dim=(-2, -1), keepdim=True) * norm_factor + 1e-6)
     for a, b, c in coeffs:
         if x.size(-2) > x.size(-1):
@@ -44,8 +44,8 @@ def orthogonalized_copy_for_stats(mat: torch.Tensor, coeffs: list[tuple[float, f
     return x.float()
 
 
-def svd_summary(mat: torch.Tensor, spectral_max_dim: int) -> dict[str, float]:
-    mat_cpu = downsample_matrix_for_svd(mat, spectral_max_dim).detach().float().cpu()
+def svd_summary(mat: torch.Tensor, svd_dim_cap: int) -> dict[str, float]:
+    mat_cpu = downsample_matrix_for_svd(mat, svd_dim_cap).detach().float().cpu()
     if mat_cpu.numel() == 0:
         return {}
     sv = torch.linalg.svdvals(mat_cpu)
@@ -75,12 +75,12 @@ def collect_spectral_metrics(
     optimizer,
     global_train_tokens: int,
     master_process: bool,
-    spectral_max_matrices: int,
-    spectral_max_dim: int,
+    num_matrices: int,
+    svd_dim_cap: int,
     coeffs: list[tuple[float, float, float]],
     norm_factor: float,
 ) -> tuple[dict, list[dict]]:
-    if not master_process or spectral_max_matrices <= 0:
+    if not master_process or num_matrices <= 0:
         return {}, []
 
     t_start = time.perf_counter()
@@ -99,13 +99,13 @@ def collect_spectral_metrics(
         matrices = momentum.reshape(-1, momentum.shape[-2], momentum.shape[-1])
         candidate_idxs = sorted({0, matrices.shape[0] // 2, matrices.shape[0] - 1})
         for mat_idx in candidate_idxs:
-            if sample_count >= spectral_max_matrices:
+            if sample_count >= num_matrices:
                 break
             mat = matrices[mat_idx]
-            mom_stats = svd_summary(mat, spectral_max_dim)
+            mom_stats = svd_summary(mat, svd_dim_cap)
             upd_stats = svd_summary(
-                orthogonalized_copy_for_stats(mat, coeffs, norm_factor, spectral_max_dim),
-                spectral_max_dim,
+                orthogonalized_copy_for_stats(mat, coeffs, norm_factor, svd_dim_cap),
+                svd_dim_cap,
             )
             if not mom_stats or not upd_stats:
                 continue
@@ -122,7 +122,7 @@ def collect_spectral_metrics(
                 add_aggregate(f"update_{key}", value)
             detail_records.append(detail)
             sample_count += 1
-        if sample_count >= spectral_max_matrices:
+        if sample_count >= num_matrices:
             break
 
     if sample_count == 0:
