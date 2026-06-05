@@ -26,6 +26,7 @@
 - 修复 spectral 模式参数名错误、AdamW 模式学习率日志、final val loss 取值错误
 - benchmark 只记录端到端总时间，分析图同步改为总 wall-clock 柱状图
 - 固定栈 warmup 改为前 2%，Adam 路径改为标准 decoupled AdamW，并对齐常见小 GPT 基线超参数
+- run 名时间戳简化为 `MMDD_HHMM`，并将 `min_lr_frac` 提高到 0.2，减轻 70M+ token 后的过早变平
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
 
 ## 固定训练栈
@@ -35,4 +36,4 @@
 - tokens_per_step = 131,072
 - seq_len = 2048
 - grad_accum_steps = 16
-- LR = 2% warmup + cosine decay 到峰值 10%
+- LR = 2% warmup + cosine decay 到峰值 20%

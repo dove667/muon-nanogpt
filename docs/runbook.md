@@ -19,7 +19,7 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 - `train_token_budget=100M`
 - `eval_interval_tokens=2M`
 - `eval_tokens=524288`
-- LR 为前 2% warmup + cosine decay 到峰值 10%
+- LR 为前 2% warmup + cosine decay 到峰值 20%
 
 ## 1. 单次训练
 

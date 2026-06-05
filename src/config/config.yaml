@@ -5,7 +5,7 @@ training:
   seq_len: 2048
   grad_accum_steps: 16
   warmup_frac: 0.02
-  min_lr_frac: 0.10
+  min_lr_frac: 0.20
   val_ppl_max: 20.0
 
   # Controlled experiment variables

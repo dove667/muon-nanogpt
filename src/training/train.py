@@ -225,7 +225,7 @@ def main() -> None:
 
     device = setup_device(base_seed=FIXED_SEED)
 
-    print(f"PyTorch {torch.__version__}  CUDA {torch.version.cuda}")
+    print(f"PyTorch {torch.__version__}  CUDA {torch.version.cuda} on device {device}")
     print(f"Python  {sys.version}")
 
     model = build_model(device)

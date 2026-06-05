@@ -25,7 +25,7 @@ def setup_device(*, base_seed: int = FIXED_SEED) -> torch.device:
 
 def default_run_name(orth: str) -> str:
     orth_cfg = get_orthogonalization()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = datetime.now().strftime("%m%d_%H%M")
     if orth == "adamw":
         return f"adamw_{timestamp}"
     if orth == "vanilla":
