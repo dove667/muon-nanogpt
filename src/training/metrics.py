@@ -170,12 +170,12 @@ def collect_spectral_metrics(
                 add_aggregate(metric_name, value)
             detail_records.append(detail)
 
-    if not detail_records:
-        return {}, []
-
-    for key, values in aggregates.items():
-        summary[f"spec/{key}"] = float(sum(values) / len(values))
     summary["spec/sample_count"] = int(len(detail_records))
     summary["spec/candidate_count"] = int(len(candidates))
     summary["spec/time_s"] = float(time.perf_counter() - t_start)
+    if not detail_records:
+        return summary, []
+
+    for key, values in aggregates.items():
+        summary[f"spec/{key}"] = float(sum(values) / len(values))
     return summary, detail_records

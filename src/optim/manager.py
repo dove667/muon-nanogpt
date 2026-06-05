@@ -6,10 +6,10 @@ from src.optim.normuon import NorMuonAndAdam
 from src.config import TRAINING, OPTIMIZER
 
 
-def compute_lr(step: int, total_steps: int, lr_mul: float = 1.0,
-               warmup_frac: float | None = None, min_lr_frac: float | None = None) -> float:
-    wf = TRAINING.warmup_frac if warmup_frac is None else warmup_frac
-    mlf = TRAINING.min_lr_frac if min_lr_frac is None else min_lr_frac
+def compute_lr(step: int, total_steps: int) -> float:
+    wf = TRAINING.warmup_frac
+    mlf = TRAINING.min_lr_frac
+    lr_mul = OPTIMIZER.lr_mul
     if total_steps <= 1:
         return lr_mul
     warmup_steps = max(1, round(total_steps * wf))

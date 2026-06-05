@@ -37,6 +37,9 @@
 - spectral 采样改为在真实 Muon 更新时抓取 `buffer_post` / `g_pre` / `g_post`，修复过去把 momentum buffer 当作 update 输入的语义错误
 - spectral 记录新增 `spectral_details.jsonl` 与 `python -m src.analysis.export_spectral_details`，并将 `orth_error` 重命名为 `semi_orth_error` 以明确其 short-side Gram 含义
 - 为 `src/analysis` `src/config` `src/data` `src/model` `src/optim` `src/training` 新增目录 README，并同步更新 runbook / experiments / README 的谱分析文档
+- 新增 `docs/report.md`，整理当前 train 与 benchmark 的实验分析：Muon 四种 schedule 的 wall-clock 基本重合，而主要差异体现在 val loss
+- `docs/report.md` 补充 AdamW 更快的双重解释：既有 Muon 正交化的额外算法成本，也有系统实现成熟度差异，其中系统层因素被列为更主要的推断
+- 修复 spectral 空样本 run 的记录口径：即使某次采样没有 Muon 候选矩阵，也会写入 `spec/sample_count=0`，避免后处理把 `--spectral` run 误判成普通 train
 
 ## 固定训练栈
 
