@@ -16,6 +16,7 @@ class Logger:
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_file = self.run_dir / "metrics.jsonl"
+        self.spectral_details_file = self.run_dir / "spectral_details.jsonl"
         self.config_file = self.run_dir / "config.json"
 
         run_config = {
@@ -37,3 +38,10 @@ class Logger:
     def log_spectral(self, summary_record: dict) -> None:
         if summary_record:
             self.log_metric(summary_record)
+
+    def log_spectral_details(self, detail_records: list[dict]) -> None:
+        if not detail_records:
+            return
+        with self.spectral_details_file.open("a", encoding="utf-8") as handle:
+            for record in detail_records:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")

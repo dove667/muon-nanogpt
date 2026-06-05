@@ -34,6 +34,9 @@
 - runbook / README / AGENTS / experiments 文档同步为三模式组织：推荐按 `runs/train|benchmark|spectral/` 分目录，分析输出统一为 `results/summary.csv` + `results/figures/`
 - 文档进一步明确：`runs/` 是当前分析工作区，历史实验需移到 `runs/` 外归档，避免被递归分析误读
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
+- spectral 采样改为在真实 Muon 更新时抓取 `buffer_post` / `g_pre` / `g_post`，修复过去把 momentum buffer 当作 update 输入的语义错误
+- spectral 记录新增 `spectral_details.jsonl` 与 `python -m src.analysis.export_spectral_details`，并将 `orth_error` 重命名为 `semi_orth_error` 以明确其 short-side Gram 含义
+- 为 `src/analysis` `src/config` `src/data` `src/model` `src/optim` `src/training` 新增目录 README，并同步更新 runbook / experiments / README 的谱分析文档
 
 ## 固定训练栈
 

@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     mode_group.add_argument("--benchmark", action="store_true",
                             help="Enable wall-clock timing measurements (adds cuda synchronize)")
     mode_group.add_argument("--spectral", action="store_true",
-                            help="Enable spectral metric collection on optimizer states")
+                            help="Enable spectral metric collection on Muon update objects")
     args = parser.parse_args()
     args.name = default_run_name(args.orth)
     return args
@@ -102,8 +102,6 @@ def run_training_loop(
     train_data_path: str,
     val_data_path: str,
     logger: Logger,
-    polar_express_coeffs: tuple[tuple[float, float, float], ...],
-    orth_norm_factor: float,
     benchmark: bool = False,
     spectral: bool = False,
 ) -> None:
@@ -152,7 +150,17 @@ def run_training_loop(
                 train_loss_accum += float(loss.detach())
             loss.backward()
 
-        step_optimizer(optimizer, step=step, total_steps=train_steps)
+        should_capture_spectral = (
+            spectral
+            and TRAINING.spectral_interval_tokens > 0
+            and global_train_tokens + TRAINING.tokens_per_step >= next_spectral_tokens
+        )
+        captured_normuon_stats = step_optimizer(
+            optimizer,
+            step=step,
+            total_steps=train_steps,
+            capture_normuon_stats=should_capture_spectral,
+        )
         global_train_tokens += TRAINING.tokens_per_step
 
         print(f"step:{step + 1}/{train_steps}")
@@ -166,18 +174,18 @@ def run_training_loop(
             }
             logger.log_metric(record)
 
-        if spectral and TRAINING.spectral_interval_tokens > 0 and global_train_tokens >= next_spectral_tokens:
-            spectral_summary, _ = collect_spectral_metrics(
+        if should_capture_spectral:
+            spectral_summary, detail_records = collect_spectral_metrics(
                 optimizer,
                 global_train_tokens=global_train_tokens,
                 master_process=True,
                 num_matrices=TRAINING.spectral_num_matrices,
                 svd_dim_cap=TRAINING.spectral_dim_cap,
-                coeffs=polar_express_coeffs,
-                norm_factor=orth_norm_factor,
+                captured_normuon_stats=captured_normuon_stats,
             )
             if spectral_summary:
                 logger.log_spectral(spectral_summary)
+                logger.log_spectral_details(detail_records)
             while next_spectral_tokens <= global_train_tokens:
                 next_spectral_tokens += TRAINING.spectral_interval_tokens
 
@@ -238,8 +246,6 @@ def main() -> None:
         train_data_path=train_data_path,
         val_data_path=val_data_path,
         logger=logger,
-        polar_express_coeffs=tuple(tuple(c) for c in coeff_schedule),
-        orth_norm_factor=norm_factor,
         benchmark=args.benchmark,
         spectral=args.spectral,
     )

@@ -148,7 +148,8 @@ class NorMuonAndAdam:
                     current_state[key] = value
 
     @torch.no_grad()
-    def step(self, do_adam: bool = True):
+    def step(self, do_adam: bool = True, capture_normuon_stats: bool = False):
+        captured_normuon_stats: dict[nn.Parameter, dict[str, Tensor]] = {}
         for label in self.scatter_order:
             param = self._param_by_label[label]
             param_cfg = self.param_cfgs[param]
@@ -164,12 +165,20 @@ class NorMuonAndAdam:
             if param_cfg.optim == "adam":
                 self._adam_update(param, grad, param_cfg)
             else:
-                self._normuon_update(param, grad, param_cfg)
+                captured = self._normuon_update(
+                    param,
+                    grad,
+                    param_cfg,
+                    capture_stats=capture_normuon_stats,
+                )
+                if captured is not None:
+                    captured_normuon_stats[param] = captured
 
         for param, param_cfg in self.param_cfgs.items():
             if param_cfg.optim == "adam" and not do_adam:
                 continue
             param.grad = None
+        return captured_normuon_stats
 
     def _adam_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig) -> None:
         beta1, beta2 = param_cfg.adam_betas
@@ -191,19 +200,33 @@ class NorMuonAndAdam:
         param.mul_(1 - lr * param_cfg.weight_decay * param_cfg.wd_mul)
         param.addcdiv_(exp_avg, denom, value=-step_size)
 
-    def _normuon_update(self, param: nn.Parameter, grad_chunk: Tensor, param_cfg: ParamConfig) -> None:
+    def _normuon_update(
+        self,
+        param: nn.Parameter,
+        grad_chunk: Tensor,
+        param_cfg: ParamConfig,
+        capture_stats: bool = False,
+    ) -> dict[str, Tensor] | None:
         state = self.param_states[param]
         grad_chunk = grad_chunk.float()
 
         eff_lr = param_cfg.lr_mul * param_cfg.lr
         eff_wd = param_cfg.wd_mul * param_cfg.weight_decay * param_cfg.lr
         momentum_t = torch.tensor(param_cfg.momentum, dtype=torch.float32, device="cpu")
+        captured = None
         value_chunk = self.orthogonalize_fn(
             grad_chunk,
             state["momentum_buffer"],
             momentum_t,
             split_baddbmm=grad_chunk.shape[-2] > 1024,
         )
+        if capture_stats:
+            momentum = momentum_t.to(device=grad_chunk.device, dtype=grad_chunk.dtype)
+            captured = {
+                "buffer_post": state["momentum_buffer"].detach().clone(),
+                "g_pre": grad_chunk.lerp(state["momentum_buffer"], momentum).detach().clone(),
+                "g_post": value_chunk.detach().clone(),
+            }
 
         red_dim = -1 if grad_chunk.shape[-2] >= grad_chunk.shape[-1] else -2
         value_chunk = self._apply_normuon_variance_reduction(
@@ -213,6 +236,7 @@ class NorMuonAndAdam:
             red_dim,
         )
         _cautious_wd_update(param.data.view(param_cfg.reshape), value_chunk, eff_wd, eff_lr)
+        return captured
 
     @staticmethod
     def _apply_normuon_variance_reduction(value_chunk, second_momentum_buffer, beta2, red_dim):

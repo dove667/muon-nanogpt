@@ -4,6 +4,8 @@ import time
 import torch
 from torch import nn
 
+SPECTRAL_OBJECTS = ("buffer_post", "g_pre", "g_post")
+
 
 def current_grad_norm(model: nn.Module) -> float:
     total = 0.0
@@ -28,20 +30,8 @@ def downsample_matrix_for_svd(mat: torch.Tensor, svd_dim_cap: int) -> torch.Tens
     return mat
 
 
-@torch.no_grad()
-def orthogonalized_copy_for_stats(mat: torch.Tensor, coeffs: list[tuple[float, float, float]], norm_factor: float, svd_dim_cap: int) -> torch.Tensor:
-    x = downsample_matrix_for_svd(mat, svd_dim_cap)
-    x = x / (x.norm(dim=(-2, -1), keepdim=True) * norm_factor + 1e-6)
-    for a, b, c in coeffs:
-        if x.size(-2) > x.size(-1):
-            gram = x.mT @ x
-            poly = b * gram + c * (gram @ gram)
-            x = a * x + x @ poly
-        else:
-            gram = x @ x.mT
-            poly = b * gram + c * (gram @ gram)
-            x = a * x + poly @ x
-    return x.float()
+def semi_orthogonality_side(mat: torch.Tensor) -> str:
+    return "cols" if mat.shape[-2] >= mat.shape[-1] else "rows"
 
 
 def svd_summary(mat: torch.Tensor, svd_dim_cap: int) -> dict[str, float]:
@@ -58,27 +48,59 @@ def svd_summary(mat: torch.Tensor, svd_dim_cap: int) -> dict[str, float]:
     stable_rank = float((sv.square().sum() / denom).item()) if sv_max > 0 else 0.0
     probs = sv / sv.sum().clamp_min(1e-30)
     entropy = float(-(probs * probs.clamp_min(1e-30).log()).sum().item())
+
+    # Semi-orthogonality is always measured on the shorter side Gram matrix:
+    # X^T X for tall matrices, XX^T for wide matrices.
     gram = mat_cpu.T @ mat_cpu if mat_cpu.shape[-2] >= mat_cpu.shape[-1] else mat_cpu @ mat_cpu.T
     eye = torch.eye(gram.shape[0], dtype=gram.dtype)
-    orth_error = float((gram - eye).norm().item() / max(gram.shape[0] ** 0.5, 1.0))
+    semi_orth_error = float((gram - eye).norm().item() / max(gram.shape[0] ** 0.5, 1.0))
     return {
         "sv_min": sv_min,
         "sv_max": sv_max,
         "sv_std": sv_std,
-        "orth_error": orth_error,
+        "semi_orth_error": semi_orth_error,
         "stable_rank": stable_rank,
         "svd_entropy": entropy,
     }
 
 
+def _candidate_indices(num_matrices: int) -> list[int]:
+    if num_matrices <= 0:
+        return []
+    if num_matrices <= 3:
+        return list(range(num_matrices))
+    return sorted({0, num_matrices // 2, num_matrices - 1})
+
+
+def _sample_positions(total_candidates: int, target_samples: int) -> list[int]:
+    if total_candidates <= 0 or target_samples <= 0:
+        return []
+    if target_samples >= total_candidates:
+        return list(range(total_candidates))
+    if target_samples == 1:
+        return [total_candidates // 2]
+    positions: list[int] = []
+    used: set[int] = set()
+    for i in range(target_samples):
+        pos = round(i * (total_candidates - 1) / (target_samples - 1))
+        while pos in used and pos + 1 < total_candidates:
+            pos += 1
+        while pos in used and pos - 1 >= 0:
+            pos -= 1
+        if pos not in used:
+            positions.append(pos)
+            used.add(pos)
+    return sorted(positions)
+
+
+@torch.no_grad()
 def collect_spectral_metrics(
     optimizer,
     global_train_tokens: int,
     master_process: bool,
     num_matrices: int,
     svd_dim_cap: int,
-    coeffs: list[tuple[float, float, float]],
-    norm_factor: float,
+    captured_normuon_stats: dict,
 ) -> tuple[dict, list[dict]]:
     if not master_process or num_matrices <= 0:
         return {}, []
@@ -87,7 +109,7 @@ def collect_spectral_metrics(
     summary = {"train/tokens": int(global_train_tokens)}
     aggregates: dict[str, list[float]] = {}
     detail_records: list[dict] = []
-    sample_count = 0
+    candidates: list[dict] = []
 
     def add_aggregate(name: str, value: float) -> None:
         aggregates.setdefault(name, []).append(float(value))
@@ -95,41 +117,65 @@ def collect_spectral_metrics(
     for param, param_cfg in optimizer.param_cfgs.items():
         if param_cfg.optim != "normuon":
             continue
-        momentum = optimizer.param_states[param]["momentum_buffer"].detach()
-        matrices = momentum.reshape(-1, momentum.shape[-2], momentum.shape[-1])
-        candidate_idxs = sorted({0, matrices.shape[0] // 2, matrices.shape[0] - 1})
-        for mat_idx in candidate_idxs:
-            if sample_count >= num_matrices:
-                break
-            mat = matrices[mat_idx]
-            mom_stats = svd_summary(mat, svd_dim_cap)
-            upd_stats = svd_summary(
-                orthogonalized_copy_for_stats(mat, coeffs, norm_factor, svd_dim_cap),
-                svd_dim_cap,
+        captured = captured_normuon_stats.get(param)
+        if not captured:
+            continue
+        first_object = captured[SPECTRAL_OBJECTS[0]]
+        matrices = first_object.reshape(-1, first_object.shape[-2], first_object.shape[-1])
+        for mat_idx in _candidate_indices(matrices.shape[0]):
+            candidates.append(
+                {
+                    "label": param_cfg.label,
+                    "matrix_index": int(mat_idx),
+                    "shape": tuple(int(dim) for dim in matrices[mat_idx].shape),
+                    "semi_orth_side": semi_orthogonality_side(matrices[mat_idx]),
+                    "objects": {
+                        object_name: captured[object_name].reshape(
+                            -1,
+                            captured[object_name].shape[-2],
+                            captured[object_name].shape[-1],
+                        )[mat_idx]
+                        for object_name in SPECTRAL_OBJECTS
+                    },
+                }
             )
-            if not mom_stats or not upd_stats:
-                continue
-            detail = {
-                "train/tokens": int(global_train_tokens),
-                "spec/label": param_cfg.label,
-                "spec/matrix_index": int(mat_idx),
-            }
-            for key, value in mom_stats.items():
-                detail[f"spec/momentum_{key}"] = value
-                add_aggregate(f"momentum_{key}", value)
-            for key, value in upd_stats.items():
-                detail[f"spec/update_{key}"] = value
-                add_aggregate(f"update_{key}", value)
-            detail_records.append(detail)
-            sample_count += 1
-        if sample_count >= num_matrices:
-            break
 
-    if sample_count == 0:
+    selected_positions = _sample_positions(len(candidates), num_matrices)
+    for sample_slot, candidate_pos in enumerate(selected_positions):
+        candidate = candidates[candidate_pos]
+        detail = {
+            "train/tokens": int(global_train_tokens),
+            "spec/label": candidate["label"],
+            "spec/matrix_index": int(candidate["matrix_index"]),
+            "spec/sample_slot": int(sample_slot),
+            "spec/candidate_position": int(candidate_pos),
+            "spec/candidate_count": int(len(candidates)),
+            "spec/rows": int(candidate["shape"][0]),
+            "spec/cols": int(candidate["shape"][1]),
+            "spec/semi_orth_side": candidate["semi_orth_side"],
+        }
+        keep_candidate = True
+        candidate_metrics: dict[str, float] = {}
+        for object_name, mat in candidate["objects"].items():
+            stats = svd_summary(mat, svd_dim_cap)
+            if not stats:
+                keep_candidate = False
+                break
+            for key, value in stats.items():
+                metric_name = f"{object_name}_{key}"
+                candidate_metrics[metric_name] = value
+        if keep_candidate:
+            for metric_name, value in candidate_metrics.items():
+                detail[f"spec/{metric_name}"] = value
+                add_aggregate(metric_name, value)
+            detail_records.append(detail)
+
+    if not detail_records:
         return {}, []
 
     for key, values in aggregates.items():
         summary[f"spec/{key}"] = float(sum(values) / len(values))
-    summary["spec/sample_count"] = int(sample_count)
+    summary["spec/sample_count"] = int(len(detail_records))
+    summary["spec/candidate_count"] = int(len(candidates))
     summary["spec/time_s"] = float(time.perf_counter() - t_start)
     return summary, detail_records

@@ -67,7 +67,7 @@ def _summarize_single_run(run_dir: Path) -> dict | None:
         "best_val_loss": min((row["val/loss"] for row in vals), default=None),
         "val_auc_tokens": _auc(val_token_points),
         "benchmark_wall_clock_s": final_row.get("benchmark/wall_clock_s"),
-        "spec_update_orth_error": final_spec.get("spec/update_orth_error"),
+        "spec_g_post_semi_orth_error": final_spec.get("spec/g_post_semi_orth_error"),
         "peak_allocated_mb": final_row.get("memory/peak_allocated_mb"),
         "status": final_row.get("status", "running_or_incomplete"),
     }
@@ -126,7 +126,7 @@ def summarize_run(runs_dir: Path) -> list[dict]:
             "spectral_run": spectral_run.get("run"),
             "spectral_name": spectral_run.get("name"),
             "spectral_schedule": spectral_run.get("schedule"),
-            "spectral_update_orth_error": spectral_run.get("spec_update_orth_error"),
+            "spectral_g_post_semi_orth_error": spectral_run.get("spec_g_post_semi_orth_error"),
             "spectral_peak_allocated_mb": spectral_run.get("peak_allocated_mb"),
             "spectral_status": spectral_run.get("status"),
         })
@@ -156,7 +156,7 @@ def main() -> int:
         "benchmark_run", "benchmark_name", "benchmark_schedule",
         "benchmark_wall_clock_s", "benchmark_peak_allocated_mb", "benchmark_status",
         "spectral_run", "spectral_name", "spectral_schedule",
-        "spectral_update_orth_error", "spectral_peak_allocated_mb", "spectral_status",
+        "spectral_g_post_semi_orth_error", "spectral_peak_allocated_mb", "spectral_status",
     ]
     with summary_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=summary_fields)

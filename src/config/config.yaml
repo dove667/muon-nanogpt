@@ -15,7 +15,7 @@ training:
   log_every_steps: 20
 
   spectral_interval_tokens: 10_000_000
-  spectral_num_matrices: 5
+  spectral_num_matrices: 12
   spectral_dim_cap: 1024
 
 model:

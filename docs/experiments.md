@@ -77,7 +77,7 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 |------|------|------|
 | 默认（纯训练） | `python -m src.training.train --orth <mode> --data-path /data` | 最快，产出 loss 曲线 |
 | Benchmark | `... --benchmark` | 测量端到端 wall-clock 时间 |
-| Spectral | `... --spectral` | 采集优化器动量矩阵的 SVD 频谱 |
+| Spectral | `... --spectral` | 采集 Muon 更新对象 `buffer_post / g_pre / g_post` 的 SVD 频谱 |
 
 
 分析阶段统一输出：
@@ -93,7 +93,7 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 | 最终效果 | `val/loss` 最终值 | 验证损失 |
 | 收敛速度 | `val/loss` 随 token 数变化曲线 | 同等预算下谁收敛更快 |
 | 计算开销 | `benchmark/wall_clock_s` | 端到端墙钟时间 |
-| 正交性质量 | `spec/update_orth_error` | $\|U^TU - I\|$（仅 spectral 模式输出） |
+| 半正交质量 | `spec/g_post_semi_orth_error` | 在 short-side Gram 上衡量正交化后矩阵的 semi-orthogonality |
 
 ## 五、预期
 
@@ -113,3 +113,4 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 4. Adam 参数每步更新，无交错 step trick
 5. 默认训练模式零 `torch.cuda.synchronize()`
 6. 命名统一：`tokens_per_step` / `tokens_per_microbatch` / `sequences_per_microbatch`
+7. spectral 采样记录真实 Muon 更新对象，并额外落盘逐矩阵 `spectral_details.jsonl` 供离线分析

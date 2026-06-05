@@ -8,7 +8,7 @@
 
 - `train`：纯训练，记录验证损失曲线
 - `benchmark`：记录端到端 wall-clock
-- `spectral`：记录频谱与正交统计
+- `spectral`：记录 Muon 真实更新对象 `buffer_post / g_pre / g_post` 的频谱与半正交统计
 
 
 ## 系统环境
@@ -69,3 +69,5 @@ uv pip install --python "$CONDA_PREFIX/bin/python" -r .uv-requirements.txt --ind
 | [`docs/experiments.md`](docs/experiments.md) | 详细实验计划书 |
 | [`docs/runbook.md`](docs/runbook.md) | 运行指南 |
 | [`docs/initial_proposal/initial_proposal.pdf`](docs/initial_proposal/initial_proposal.pdf) | 课程项目初期提案 |
+
+`src/` 下各子目录也都带有本地 README，说明当前目录的职责和文件分工。

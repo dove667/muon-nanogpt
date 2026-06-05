@@ -64,7 +64,13 @@ def build_optimizer(model, *, orth_mode: str, polar_express) -> NorMuonAndAdam:
     )
 
 
-def step_optimizer(optimizer: NorMuonAndAdam, *, step: int, total_steps: int) -> None:
+def step_optimizer(
+    optimizer: NorMuonAndAdam,
+    *,
+    step: int,
+    total_steps: int,
+    capture_normuon_stats: bool = False,
+) -> dict:
     step_lr = compute_lr(step, total_steps)
     muon_momentum = OPTIMIZER.muon_defaults.momentum
 
@@ -73,4 +79,4 @@ def step_optimizer(optimizer: NorMuonAndAdam, *, step: int, total_steps: int) ->
         if param_cfg.optim == "normuon":
             param_cfg.momentum = muon_momentum
 
-    optimizer.step(do_adam=True)
+    return optimizer.step(do_adam=True, capture_normuon_stats=capture_normuon_stats)

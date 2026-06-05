@@ -55,7 +55,7 @@ python -m src.training.train --orth fast --data-path /data/fineweb10B --benchmar
 python -m src.training.train --orth fast --data-path /data/fineweb10B --spectral
 ```
 
-用途：采集优化器状态频谱与正交统计。该模式会记录 `spec/*` 指标。
+用途：采集 Muon 真实更新对象的频谱与半正交统计。该模式会记录 `spec/*` 聚合指标，并额外输出逐矩阵的 `spectral_details.jsonl`。
 
 ### 参数
 
@@ -64,7 +64,7 @@ python -m src.training.train --orth fast --data-path /data/fineweb10B --spectral
 | `--orth` | str | `fast` | 正交化策略：`adamw` / `vanilla` / `manual` / `fast` / `polar_express` |
 | `--data-path` | str | **必传** | 数据集根目录 |
 | `--benchmark` | flag | False | 开启 wall-clock 计时（含 cuda synchronize） |
-| `--spectral` | flag | False | 采集优化器状态频谱指标 |
+| `--spectral` | flag | False | 采集 Muon 更新对象的谱指标 |
 
 默认模式下训练循环无 `torch.cuda.synchronize()` 开销。`--benchmark` 和 `--spectral` 是互斥参数，不能同时传。
 随机种子固定写死在代码里，不通过 CLI 暴露；run 名使用时间戳，避免复跑时覆盖或追加到旧日志。
@@ -91,6 +91,16 @@ python -m src.analysis.plot_curves
 
 输出：`results/figures/` 下 `val_loss_vs_tokens` / `benchmark_wall_clock` / `final_val_loss`
 
+### 谱明细导出
+
+```bash
+python -m src.analysis.export_spectral_details
+```
+
+输出：`results/spectral_details.csv`
+
+该文件会把所有 spectral run 的 `spectral_details.jsonl` 合并成一个表，便于按层、按对象、按矩阵做离线分析。
+
 ## 3. 数据下载
 
 ```bash
@@ -105,6 +115,7 @@ python scripts/download_fineweb.py [num_chunks]
 |---|---|
 | `config.json` | 实验配置快照（run_name、固定 seed、base_lr、train_token_budget、orth_config） |
 | `metrics.jsonl` | 该 run 对应模式下的时序指标 |
+| `spectral_details.jsonl` | 仅 spectral 模式生成；每次采样的逐矩阵谱统计 |
 
 `runs/` 是当前分析工作区，不是历史实验仓库。运行 `analysis/` 下的脚本时一定要满足以下条件：
 
@@ -122,6 +133,29 @@ python scripts/download_fineweb.py [num_chunks]
 
 - `results/summary.csv`：单表汇总，按 `orthogonalizer_type` 汇总三种模式
 - `results/figures/`：对比图
+- `results/spectral_details.csv`：逐矩阵谱明细导出
+
+## Spectral 指标口径
+
+当前 spectral 模式不再把 `momentum_buffer` 误当成真实 update 输入，而是在 Muon 真正更新时抓取三个对象：
+
+- `buffer_post`：动量缓存更新后的矩阵
+- `g_pre`：进入正交化前的 Nesterov 混合矩阵
+- `g_post`：正交化后的矩阵
+
+每个对象都会记录：
+
+- `sv_min` / `sv_max` / `sv_std`
+- `stable_rank`
+- `svd_entropy`
+- `semi_orth_error`
+
+其中 `semi_orth_error` 的定义是：
+
+- tall 矩阵使用 `X^T X`
+- wide 矩阵使用 `X X^T`
+
+也就是统一在 short-side Gram 上衡量 semi-orthogonality，而不是用一个会引起 tall / wide 语义混淆的 `orth_error` 名称。
 
 ## 注意
 
