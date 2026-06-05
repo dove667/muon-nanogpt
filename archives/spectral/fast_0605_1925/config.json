@@ -1,0 +1,46 @@
+{
+  "T_ns": 5,
+  "base_lr": 0.023,
+  "coeff_schedule": [
+    [
+      3.4445,
+      -4.775,
+      2.0315
+    ],
+    [
+      3.4445,
+      -4.775,
+      2.0315
+    ],
+    [
+      3.4445,
+      -4.775,
+      2.0315
+    ],
+    [
+      3.4445,
+      -4.775,
+      2.0315
+    ],
+    [
+      3.4445,
+      -4.775,
+      2.0315
+    ]
+  ],
+  "fast_steps": 5,
+  "grad_accum_steps": 16,
+  "lr_mul": 1.0,
+  "orth_schedule_name": "fast",
+  "orthogonalizer_type": "fast",
+  "pe_T": null,
+  "pe_cushion": null,
+  "pe_lower_bound": null,
+  "pe_safety_factor": null,
+  "run_name": "fast_0605_1925",
+  "seed": 0,
+  "seq_len": 2048,
+  "stable_steps": 0,
+  "tokens_per_step": 131072,
+  "train_token_budget": 100000000
+}
