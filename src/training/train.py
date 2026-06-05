@@ -8,8 +8,7 @@ import torch
 from torch import nn
 
 from src.model.gpt import build_model
-from src.optim import build_optimizer, step_optimizer
-from src.optim import build_coeff_schedule, make_polar_express, orth_norm_factor, orth_record
+from src.optim import build_optimizer, step_optimizer, build_coeff_schedule, make_polar_express, orth_norm_factor, orth_record
 from src.config import TRAINING, OPTIMIZER, get_orthogonalization
 from src.training.utils import FIXED_SEED, default_run_name, resolve_data_path, setup_device, primary_lr
 from src.training.logger import Logger

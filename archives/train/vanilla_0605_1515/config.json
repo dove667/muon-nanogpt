@@ -1,0 +1,46 @@
+{
+  "T_ns": 5,
+  "base_lr": 0.023,
+  "coeff_schedule": [
+    [
+      2.0,
+      -1.5,
+      0.5
+    ],
+    [
+      2.0,
+      -1.5,
+      0.5
+    ],
+    [
+      2.0,
+      -1.5,
+      0.5
+    ],
+    [
+      2.0,
+      -1.5,
+      0.5
+    ],
+    [
+      2.0,
+      -1.5,
+      0.5
+    ]
+  ],
+  "fast_steps": 0,
+  "grad_accum_steps": 16,
+  "lr_mul": 1.0,
+  "orth_schedule_name": "vanilla",
+  "orthogonalizer_type": "vanilla",
+  "pe_T": null,
+  "pe_cushion": null,
+  "pe_lower_bound": null,
+  "pe_safety_factor": null,
+  "run_name": "vanilla_0605_1515",
+  "seed": 0,
+  "seq_len": 2048,
+  "stable_steps": 5,
+  "tokens_per_step": 131072,
+  "train_token_budget": 100000000
+}

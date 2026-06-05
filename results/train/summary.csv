@@ -1,0 +1,6 @@
+orthogonalizer_type,train_run,train_name,train_schedule,train_final_val_loss,train_best_val_loss,train_val_auc_tokens,train_peak_allocated_mb,train_status,benchmark_run,benchmark_name,benchmark_schedule,benchmark_wall_clock_s,benchmark_peak_allocated_mb,benchmark_status,spectral_run,spectral_name,spectral_schedule,spectral_update_orth_error,spectral_peak_allocated_mb,spectral_status
+adamw,runs/adamw_0605_1447,adamw_0605_1447,adamw,5.5182695388793945,5.518205165863037,6.131239358999005,8380,completed,,,,,,,,,,,,
+vanilla,runs/vanilla_0605_1515,vanilla_0605_1515,vanilla,4.532286167144775,4.532286167144775,5.322543616275711,8074,completed,,,,,,,,,,,,
+manual,runs/manual_f3_s2_0605_1516,manual_f3_s2_0605_1516,manual_f3_s2,4.314679145812988,4.314679145812988,5.029091418507588,8074,completed,,,,,,,,,,,,
+fast,runs/fast_0605_1448,fast_0605_1448,fast,4.2806878089904785,4.2806878089904785,4.9353859979943575,8074,completed,,,,,,,,,,,,
+polar_express,runs/polar_express_l1e-3_0605_1516,polar_express_l1e-3_0605_1516,pe_l1e-3,4.289600372314453,4.289600372314453,4.934162749822839,8074,completed,,,,,,,,,,,,

@@ -1,0 +1,20 @@
+{
+  "T_ns": 0,
+  "base_lr": 0.0006,
+  "coeff_schedule": [],
+  "fast_steps": null,
+  "grad_accum_steps": 16,
+  "lr_mul": 1.0,
+  "orth_schedule_name": "adamw",
+  "orthogonalizer_type": "adamw",
+  "pe_T": null,
+  "pe_cushion": null,
+  "pe_lower_bound": null,
+  "pe_safety_factor": null,
+  "run_name": "adamw_0605_1628",
+  "seed": 0,
+  "seq_len": 2048,
+  "stable_steps": null,
+  "tokens_per_step": 131072,
+  "train_token_budget": 100000000
+}

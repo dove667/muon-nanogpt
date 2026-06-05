@@ -1,0 +1,6 @@
+orthogonalizer_type,train_run,train_name,train_schedule,train_final_val_loss,train_best_val_loss,train_val_auc_tokens,train_peak_allocated_mb,train_status,benchmark_run,benchmark_name,benchmark_schedule,benchmark_wall_clock_s,benchmark_peak_allocated_mb,benchmark_status,spectral_run,spectral_name,spectral_schedule,spectral_update_orth_error,spectral_peak_allocated_mb,spectral_status
+adamw,,,,,,,,,runs/adamw_0605_1628,adamw_0605_1628,adamw,,8380,completed,,,,,,
+vanilla,,,,,,,,,runs/vanilla_0605_1627,vanilla_0605_1627,vanilla,,8074,completed,,,,,,
+manual,,,,,,,,,runs/manual_f3_s2_0605_1629,manual_f3_s2_0605_1629,manual_f3_s2,,8074,completed,,,,,,
+fast,,,,,,,,,runs/fast_0605_1626,fast_0605_1626,fast,,8074,completed,,,,,,
+polar_express,,,,,,,,,runs/polar_express_l1e-3_0605_1630,polar_express_l1e-3_0605_1630,pe_l1e-3,,8074,completed,,,,,,

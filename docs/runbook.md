@@ -106,9 +106,9 @@ python scripts/download_fineweb.py [num_chunks]
 | `config.json` | 实验配置快照（run_name、固定 seed、base_lr、train_token_budget、orth_config） |
 | `metrics.jsonl` | 该 run 对应模式下的时序指标 |
 
-`runs/` 是当前分析工作区，不是历史实验仓库。运行 `analysis/`下的脚本是一定要：
+`runs/` 是当前分析工作区，不是历史实验仓库。运行 `analysis/` 下的脚本时一定要满足以下条件：
 
-- `runs/` 里只保留当前要分析的一组 run
+- `runs/` 里只保留当前要分析的一组 run，历史 run 需要移到 `runs/` 外的其他目录归档，避免被分析脚本递归误读
 - 同一个 `orthogonalizer_type + mode` 在 `runs/` 下只能出现一次
 
 分析脚本会递归扫描 `runs/` 下所有 `metrics.jsonl`，自动根据日志键把 run 判成 `train` / `benchmark` / `spectral`：
