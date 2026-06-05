@@ -10,6 +10,7 @@
 - 单次训练（纯训练模式，无额外同步开销）：`python -m src.training.train --orth <mode> --data-path /data/fineweb10B`
 - BenchMark 模式（测量 wall-clock 吞吐）：`python -m src.training.train ... --benchmark`
 - 谱分析模式（采集优化器状态频谱）：`python -m src.training.train ... --spectral`
+- `--benchmark` 和 `--spectral` 互斥，不能同时传
 - 162M 模型 4090 单卡完全够用，无分布式逻辑
 
 ## 配置管理
@@ -58,7 +59,7 @@ src/
 │   ├── utils.py                 # setup_device, default_run_name, resolve_data_path
 │   └── __init__.py
 ├── analysis/                    # 训练后分析
-│   ├── summarize_runs.py        # → results/run_summary.csv + orth_summary.csv
+│   ├── summarize_runs.py        # → results/summary.csv
 │   ├── plot_curves.py           # → results/figures/（3 张 PNG）
 │   └── __init__.py
 ```
@@ -77,7 +78,7 @@ src/
 ## 分析流水线
 
 训练完成后依次运行：
-1. `python -m src.analysis.summarize_runs` → `results/run_summary.csv` + `results/orth_summary.csv`
+1. `python -m src.analysis.summarize_runs` → `results/summary.csv`
 2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / benchmark_wall_clock / final_val_loss）
 
 ## 项目约定
@@ -85,7 +86,7 @@ src/
 - 无单元测试、无 linter、无 typechecker 配置——验证靠训练实验
 - `5090_results/` 是历史存档，**禁止修改**
 - 数据格式：FineWeb-10B 预分词 BOS 对齐 shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
-- 每轮训练输出到 `runs/<name>/`（`config.json` + `metrics.jsonl`）
+- 每轮训练默认输出到 `runs/<name>/`（`config.json` + `metrics.jsonl`）；如需按模式管理，可在训练后整理到 `runs/train/` `runs/benchmark/` `runs/spectral/`
 - 无 W&B，所有日志为本地 JSONL
 - 所有运行命令使用 `python -m <module>` 格式
 

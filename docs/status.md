@@ -31,6 +31,7 @@
 - 训练后汇总输出合并为单个 `results/summary.csv`，每个 `orth` 一行，减少 `run_summary.csv` / `orth_summary.csv` 的重复
 - `summarize_runs.py` 汇总流程收成单层，区分 `orthogonalizer_type` 与 `orth_error` 语义，减少 `orth` 歧义命名
 - train CLI 将 `--benchmark` 和 `--spectral` 设为互斥参数，禁止单个 run 混合两种诊断模式
+- runbook / README / AGENTS / experiments 文档同步为三模式组织：推荐按 `runs/train|benchmark|spectral/` 分目录，分析输出统一为 `results/summary.csv` + `results/figures/`
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
 
 ## 固定训练栈

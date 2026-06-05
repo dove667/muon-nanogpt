@@ -79,6 +79,20 @@ Muon 优化器通过 Newton-Schulz（NS）迭代将动量矩阵正交化。每�
 | Benchmark | `... --benchmark` | 测量端到端 wall-clock 时间 |
 | Spectral | `... --spectral` | 采集优化器动量矩阵的 SVD 频谱 |
 
+推荐在训练完成后整理为：
+
+```text
+runs/
+  train/
+  benchmark/
+  spectral/
+```
+
+分析阶段统一输出：
+
+- `python -m src.analysis.summarize_runs` → `results/summary.csv`
+- `python -m src.analysis.plot_curves` → `results/figures/`
+
 
 ## 四、评估指标
 

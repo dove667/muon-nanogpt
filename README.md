@@ -4,6 +4,14 @@
 
 研究 Muon 优化器中 Newton-Schulz 正交化系数调度对 GPT 预训练的影响。当前实验对比五种固定配置：`adamw`、`vanilla`、`manual`、`fast`、`polar_express`，并在统一的 fixed-stack 下比较验证损失、计算开销和更新矩阵的正交性。
 
+当前运行组织分为三种互斥模式：
+
+- `train`：纯训练，记录验证损失曲线
+- `benchmark`：记录端到端 wall-clock
+- `spectral`：记录频谱与正交统计
+
+训练输出统一写入 `runs/`；训练后可按 `train/`、`benchmark/`、`spectral/` 子目录整理，分析脚本会递归读取。分析输出统一写入 `results/summary.csv` 和 `results/figures/`。
+
 ## 系统环境
 
 - 1× RTX 4090 (24GB VRAM)，CUDA 12.1，PyTorch 2.5.1+cu121
