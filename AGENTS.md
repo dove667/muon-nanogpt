@@ -60,7 +60,8 @@ src/
 │   └── __init__.py
 ├── analysis/                    # 训练后分析
 │   ├── summarize_runs.py        # → results/summary.csv
-│   ├── plot_curves.py           # → results/figures/（3 张 PNG）
+│   ├── plot_curves.py           # → results/figures/（val loss、benchmark、spectral 共 6 张 PNG）
+│   ├── export_spectral_details.py  # → results/spectral_details.csv
 │   └── __init__.py
 ```
 
@@ -79,7 +80,7 @@ src/
 
 训练完成后依次运行：
 1. `python -m src.analysis.summarize_runs` → `results/summary.csv`
-2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / benchmark_wall_clock / final_val_loss）
+2. `python -m src.analysis.plot_curves` → `results/figures/`（val_loss_vs_tokens / benchmark_wall_clock / final_val_loss / 谱分析 3 张）
 
 ## 项目约定
 

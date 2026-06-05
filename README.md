@@ -67,6 +67,8 @@ uv pip install --python "$CONDA_PREFIX/bin/python" -r .uv-requirements.txt --ind
 | 文档 | 内容 |
 |---|---|
 | [`docs/experiments.md`](docs/experiments.md) | 详细实验计划书 |
+| [`docs/report.md`](docs/report.md) | 实验结果分析报告 |
+| [`docs/status.md`](docs/status.md) | 项目状态追踪 |
 | [`docs/runbook.md`](docs/runbook.md) | 运行指南 |
 | [`docs/initial_proposal/initial_proposal.pdf`](docs/initial_proposal/initial_proposal.pdf) | 课程项目初期提案 |
 

@@ -11,7 +11,7 @@
 
 - `__init__.py`：分析模块导出占位。
 - `summarize_runs.py`：递归扫描 `runs/`，输出 `results/summary.csv`，按 `orthogonalizer_type × mode` 汇总 train / benchmark / spectral 关键指标。
-- `plot_curves.py`：根据 `metrics.jsonl` 生成训练损失曲线、benchmark wall-clock 柱状图和 final val loss 柱状图。
+- `plot_curves.py`：根据 `metrics.jsonl` 生成训练损失曲线、benchmark wall-clock 柱状图和 final val loss 柱状图；同时读取 `spectral_details.jsonl` 生成谱分析图（`g_post` 半正交误差随 token 的变化、`buffer_post/g_pre/g_post` 对比、attention/MLP 分解）。
 - `export_spectral_details.py`：把每次谱分析采样得到的 `spectral_details.jsonl` 合并导出为 `results/spectral_details.csv`，便于离线做分层或逐矩阵分析。
 
 ## 当前谱分析口径

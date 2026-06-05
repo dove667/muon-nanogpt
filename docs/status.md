@@ -1,6 +1,6 @@
 # 项目状态
 
-## 当前阶段：fixed T=5 对照实验
+## 当前阶段：实验完成，进入报告整理
 
 - 5 配置 × 固定 seed 1 次 = 5 runs（不再考虑种子随机性）
 - 训练入口：`python -m src.training.train --orth <mode> --data-path /data`
@@ -40,6 +40,8 @@
 - 新增 `docs/report.md`，整理当前 train 与 benchmark 的实验分析：Muon 四种 schedule 的 wall-clock 基本重合，而主要差异体现在 val loss
 - `docs/report.md` 补充 AdamW 更快的双重解释：既有 Muon 正交化的额外算法成本，也有系统实现成熟度差异，其中系统层因素被列为更主要的推断
 - 修复 spectral 空样本 run 的记录口径：即使某次采样没有 Muon 候选矩阵，也会写入 `spec/sample_count=0`，避免后处理把 `--spectral` run 误判成普通 train
+- 谱分析可视化功能并入 `plot_curves.py`，通过 `--spectral` 数据自动触发，不再使用独立的 `plot_spectral.py`
+- 全部 train / benchmark / spectral 实验完成，当前文档结论已同步到 `docs/report.md`
 
 ## 固定训练栈
 
