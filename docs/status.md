@@ -27,6 +27,10 @@
 - benchmark 只记录端到端总时间，分析图同步改为总 wall-clock 柱状图
 - 固定栈 warmup 改为前 2%，Adam 路径改为标准 decoupled AdamW，并对齐常见小 GPT 基线超参数
 - run 名时间戳简化为 `MMDD_HHMM`，并将 `min_lr_frac` 提高到 0.2，减轻 70M+ token 后的过早变平
+- analysis 脚本移除多 seed / 多 run 平均与宽松兼容；按 `train` / `benchmark` / `spectral` 严格区分，同一 `orth` 同一模式重复即报错
+- 训练后汇总输出合并为单个 `results/summary.csv`，每个 `orth` 一行，减少 `run_summary.csv` / `orth_summary.csv` 的重复
+- `summarize_runs.py` 汇总流程收成单层，区分 `orthogonalizer_type` 与 `orth_error` 语义，减少 `orth` 歧义命名
+- train CLI 将 `--benchmark` 和 `--spectral` 设为互斥参数，禁止单个 run 混合两种诊断模式
 - 文档同步更新：README / AGENTS.md / runbook / experiments / status
 
 ## 固定训练栈

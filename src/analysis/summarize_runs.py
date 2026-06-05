@@ -1,30 +1,10 @@
-#!/usr/bin/env python
-"""Summarize training runs into run-level and config-level CSVs.
-
-Reads runs/<name>/metrics.jsonl + config.json for all completed runs
-and writes results/run_summary.csv + results/orth_summary.csv.
-"""
-
-import argparse
 import csv
 import json
-from collections import defaultdict
 from pathlib import Path
-from statistics import mean
 
 from src.paths import ROOT, read_jsonl
 
-ORTH_ORDER = ["adamw", "vanilla", "manual", "fast", "polar_express"]
-
-
-def _orth_label(orth: str) -> str:
-    return {
-        "adamw": "AdamW",
-        "vanilla": "Vanilla",
-        "manual": "Manual",
-        "fast": "Fast",
-        "polar_express": "Polar Express",
-    }.get(orth, orth)
+ORTHOGONALIZER_ORDER = ["adamw", "vanilla", "manual", "fast", "polar_express"]
 
 
 def _auc(points: list[tuple[float, float]]) -> float | None:
@@ -38,21 +18,36 @@ def _auc(points: list[tuple[float, float]]) -> float | None:
     return total / span if span > 0 else None
 
 
-def summarize_run(run_dir: Path) -> dict | None:
+def _detect_mode(rows: list[dict]) -> str:
+    has_benchmark = any("benchmark/wall_clock_s" in row for row in rows)
+    has_spectral = any("spec/sample_count" in row for row in rows)
+    if has_benchmark and has_spectral:
+        raise ValueError("Mixed benchmark+spectrum runs are not supported.")
+    if has_benchmark:
+        return "benchmark"
+    if has_spectral:
+        return "spectral"
+    return "train"
+
+
+def _summarize_single_run(run_dir: Path) -> dict | None:
     metrics_path = run_dir / "metrics.jsonl"
     config_path = run_dir / "config.json"
     if not metrics_path.exists():
-        return None
+        raise FileNotFoundError(f"Missing metrics file: {metrics_path}")
+    if not config_path.exists():
+        raise FileNotFoundError(f"Missing config file: {config_path}")
     rows = read_jsonl(metrics_path)
     if not rows:
         return None
 
-    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     vals = [row for row in rows if "val/loss" in row]
     specs = [row for row in rows if "spec/sample_count" in row]
     final_row = rows[-1]
     final_val = vals[-1] if vals else {}
     final_spec = specs[-1] if specs else {}
+    mode = _detect_mode(rows)
 
     val_token_points = [
         (float(row["val/global_train_tokens"]), float(row["val/loss"]))
@@ -60,13 +55,13 @@ def summarize_run(run_dir: Path) -> dict | None:
         if "val/global_train_tokens" in row
     ]
 
-    orth = config.get("orthogonalizer_type")
-    name = config.get("run_name", run_dir.name)
+    orthogonalizer_type = config["orthogonalizer_type"]
+    run_name = config["run_name"]
     return {
         "run": str(run_dir.relative_to(ROOT)),
-        "name": name,
-        "orthogonalizer_type": orth,
-        "orth_label": _orth_label(orth),
+        "name": run_name,
+        "mode": mode,
+        "orthogonalizer_type": orthogonalizer_type,
         "schedule": config.get("orth_schedule_name"),
         "final_val_loss": final_val.get("val/loss"),
         "best_val_loss": min((row["val/loss"] for row in vals), default=None),
@@ -78,112 +73,97 @@ def summarize_run(run_dir: Path) -> dict | None:
     }
 
 
-def summarize_groups(rows: list[dict]) -> list[dict]:
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for row in rows:
-        orth = row.get("orthogonalizer_type")
-        if orth:
-            grouped[orth].append(row)
+def summarize_run(runs_dir: Path) -> list[dict]:
+    run_dirs = sorted(path.parent for path in runs_dir.rglob("metrics.jsonl"))
+    run_summaries = [row for row in (_summarize_single_run(run_dir) for run_dir in run_dirs) if row is not None]
+    if not run_summaries:
+        return []
 
-    summary: list[dict] = []
-    for orth in ORTH_ORDER:
-        group_rows = grouped.get(orth, [])
-        if not group_rows:
+    run_summaries.sort(key=lambda row: (
+        ORTHOGONALIZER_ORDER.index(row["orthogonalizer_type"])
+        if row["orthogonalizer_type"] in ORTHOGONALIZER_ORDER else 999,
+        row["mode"],
+        row["name"],
+    ))
+
+    runs_by_type_and_mode: dict[str, dict[str, dict]] = {}
+    for run_summary in run_summaries:
+        orthogonalizer_type = run_summary["orthogonalizer_type"]
+        run_mode = run_summary["mode"]
+        runs_by_mode = runs_by_type_and_mode.setdefault(orthogonalizer_type, {})
+        if run_mode in runs_by_mode:
+            raise ValueError(
+                "Duplicate "
+                f"{run_mode} run for orthogonalizer_type={orthogonalizer_type}: "
+                f"{runs_by_mode[run_mode]['run']} and {run_summary['run']}"
+            )
+        runs_by_mode[run_mode] = run_summary
+
+    summary_rows: list[dict] = []
+    for orthogonalizer_type in ORTHOGONALIZER_ORDER:
+        runs_by_mode = runs_by_type_and_mode.get(orthogonalizer_type)
+        if not runs_by_mode:
             continue
-
-        def _collect(key: str) -> list[float]:
-            values = []
-            for row in group_rows:
-                value = row.get(key)
-                if value is not None:
-                    values.append(float(value))
-            return values
-
-        val_losses = _collect("final_val_loss")
-        orth_errors = _collect("spec_update_orth_error")
-        statuses = [row.get("status") for row in group_rows]
-
-        summary.append({
-            "orthogonalizer_type": orth,
-            "orth_label": _orth_label(orth),
-            "run_count": len(group_rows),
-            "completed_count": sum(s == "completed" for s in statuses),
-            "final_val_loss": mean(val_losses) if val_losses else None,
-            "spec_update_orth_error": mean(orth_errors) if orth_errors else None,
+        train_run = runs_by_mode.get("train", {})
+        benchmark_run = runs_by_mode.get("benchmark", {})
+        spectral_run = runs_by_mode.get("spectral", {})
+        summary_rows.append({
+            "orthogonalizer_type": orthogonalizer_type,
+            "train_run": train_run.get("run"),
+            "train_name": train_run.get("name"),
+            "train_schedule": train_run.get("schedule"),
+            "train_final_val_loss": train_run.get("final_val_loss"),
+            "train_best_val_loss": train_run.get("best_val_loss"),
+            "train_val_auc_tokens": train_run.get("val_auc_tokens"),
+            "train_peak_allocated_mb": train_run.get("peak_allocated_mb"),
+            "train_status": train_run.get("status"),
+            "benchmark_run": benchmark_run.get("run"),
+            "benchmark_name": benchmark_run.get("name"),
+            "benchmark_schedule": benchmark_run.get("schedule"),
+            "benchmark_wall_clock_s": benchmark_run.get("benchmark_wall_clock_s"),
+            "benchmark_peak_allocated_mb": benchmark_run.get("peak_allocated_mb"),
+            "benchmark_status": benchmark_run.get("status"),
+            "spectral_run": spectral_run.get("run"),
+            "spectral_name": spectral_run.get("name"),
+            "spectral_schedule": spectral_run.get("schedule"),
+            "spectral_update_orth_error": spectral_run.get("spec_update_orth_error"),
+            "spectral_peak_allocated_mb": spectral_run.get("peak_allocated_mb"),
+            "spectral_status": spectral_run.get("status"),
         })
-    return summary
-
-
-def _fmt(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return str(value)
+    return summary_rows
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default="results")
-    parser.add_argument("--print-top", type=int, default=0)
-    parser.add_argument("--allow-empty", action="store_true")
-    args = parser.parse_args()
-
     runs_dir = (ROOT / "runs").resolve()
-    out_dir = (ROOT / args.out_dir).resolve()
+    out_dir = (ROOT / "results").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    run_dirs = [path.parent for path in runs_dir.rglob("metrics.jsonl")]
-    rows = [r for r in (summarize_run(d) for d in sorted(run_dirs)) if r is not None]
-    rows.sort(key=lambda row: (
-        ORTH_ORDER.index(row["orthogonalizer_type"])
-        if row["orthogonalizer_type"] in ORTH_ORDER else 999,
-        row["name"],
-    ))
-    orth_rows = summarize_groups(rows)
-
-    run_csv = out_dir / "run_summary.csv"
-    orth_csv = out_dir / "orth_summary.csv"
-    if not rows and run_csv.exists() and not args.allow_empty:
-        print(f"No run metrics found; preserved existing {run_csv}")
+    if not runs_dir.exists():
+        print(f"No runs directory found: {runs_dir}")
         return 0
 
-    run_fields = [
-        "run", "name", "orthogonalizer_type", "orth_label",
-        "schedule", "final_val_loss", "best_val_loss",
-        "val_auc_tokens", "benchmark_wall_clock_s",
-        "spec_update_orth_error", "peak_allocated_mb", "status",
+    summary_rows = summarize_run(runs_dir)
+    if not summary_rows:
+        print(f"No run metrics found under {runs_dir}")
+        return 0
+    summary_csv = out_dir / "summary.csv"
+
+    summary_fields = [
+        "orthogonalizer_type",
+        "train_run", "train_name", "train_schedule",
+        "train_final_val_loss", "train_best_val_loss", "train_val_auc_tokens",
+        "train_peak_allocated_mb", "train_status",
+        "benchmark_run", "benchmark_name", "benchmark_schedule",
+        "benchmark_wall_clock_s", "benchmark_peak_allocated_mb", "benchmark_status",
+        "spectral_run", "spectral_name", "spectral_schedule",
+        "spectral_update_orth_error", "spectral_peak_allocated_mb", "spectral_status",
     ]
-    with run_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=run_fields)
+    with summary_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=summary_fields)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(summary_rows)
 
-    orth_fields = [
-        "orthogonalizer_type", "orth_label", "run_count", "completed_count",
-        "final_val_loss", "spec_update_orth_error",
-    ]
-    with orth_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=orth_fields)
-        writer.writeheader()
-        writer.writerows(orth_rows)
-
-    print(f"Wrote {run_csv}")
-    print(f"Wrote {orth_csv}")
-
-    if args.print_top > 0:
-        completed = [row for row in rows if row.get("final_val_loss") is not None]
-        completed.sort(key=lambda row: float(row["final_val_loss"]))
-        print("Top runs by final validation loss:")
-        print("orth,name,final_val_loss,status")
-        for row in completed[:args.print_top]:
-            print(",".join([
-                _fmt(row["orth_label"]),
-                _fmt(row["name"]),
-                _fmt(row["final_val_loss"]),
-                _fmt(row["status"]),
-            ]))
-
+    print(f"Wrote {summary_csv}")
     return 0
 
 

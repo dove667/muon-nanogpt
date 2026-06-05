@@ -1,26 +1,18 @@
 #!/usr/bin/env python
-"""Plot validation loss curves for all completed runs.
-
-Reads runs/<name>/metrics.jsonl and outputs results/figures/*.png.
-"""
-
-import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
-from statistics import mean
 
 from src.paths import ROOT, read_jsonl
 
-ORTH_ORDER = ["adamw", "vanilla", "manual", "fast", "polar_express"]
-ORTH_LABEL = {
+ORTHOGONALIZER_ORDER = ["adamw", "vanilla", "manual", "fast", "polar_express"]
+ORTHOGONALIZER_LABEL = {
     "adamw": "AdamW",
     "vanilla": "Vanilla",
     "manual": "Manual",
     "fast": "Fast",
     "polar_express": "Polar Express",
 }
-ORTH_COLOR = {
+ORTHOGONALIZER_COLOR = {
     "adamw": "#4c78a8",
     "vanilla": "#72b7b2",
     "manual": "#f58518",
@@ -29,20 +21,33 @@ ORTH_COLOR = {
 }
 
 
-def _load_runs(runs_dir: Path, orths: set[str] | None) -> list[dict]:
+def _detect_mode(rows: list[dict]) -> str:
+    has_benchmark = any("benchmark/wall_clock_s" in row for row in rows)
+    has_spectral = any("spec/sample_count" in row for row in rows)
+    if has_benchmark and has_spectral:
+        raise ValueError("Mixed benchmark+spectrum runs are not supported.")
+    if has_benchmark:
+        return "benchmark"
+    if has_spectral:
+        return "spectral"
+    return "train"
+
+
+def _load_runs(runs_dir: Path) -> list[dict]:
     runs = []
     for metrics_path in sorted(runs_dir.rglob("metrics.jsonl")):
         run_dir = metrics_path.parent
         config_path = run_dir / "config.json"
-        config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
-        orth = config.get("orthogonalizer_type")
-        if orths and orth not in orths:
-            continue
-        name = config.get("run_name", run_dir.name)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Missing config file: {config_path}")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        rows = read_jsonl(metrics_path)
+        mode = _detect_mode(rows)
         runs.append({
-            "name": name,
-            "orth": orth,
-            "rows": read_jsonl(metrics_path),
+            "name": config["run_name"],
+            "orthogonalizer_type": config["orthogonalizer_type"],
+            "mode": mode,
+            "rows": rows,
         })
     return runs
 
@@ -62,28 +67,45 @@ def _last_metric(run: dict, key: str) -> float | None:
     return None
 
 
+def _index_runs(runs: list[dict]) -> dict[tuple[str, str], dict]:
+    indexed: dict[tuple[str, str], dict] = {}
+    for run in runs:
+        key = (run["orthogonalizer_type"], run["mode"])
+        if key in indexed:
+            raise ValueError(
+                "Duplicate "
+                f"{run['mode']} run for orthogonalizer_type={run['orthogonalizer_type']}: "
+                f"{indexed[key]['name']} and {run['name']}"
+            )
+        indexed[key] = run
+    return indexed
+
+
 def plot_val_loss_vs_tokens(runs: list[dict], out_dir: Path) -> None:
-    """One val/loss curve per orth vs train tokens."""
+    """One train-mode val/loss curve per orth vs train tokens."""
     import matplotlib.pyplot as plt
 
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for run in runs:
-        grouped.setdefault(run.get("orth", ""), []).append(run)
+    indexed = _index_runs(runs)
 
     plt.figure(figsize=(10, 6))
     any_series = False
-    for orth in ORTH_ORDER:
-        orth_runs = grouped.get(orth, [])
-        by_x: dict[float, list[float]] = defaultdict(list)
-        for run in orth_runs:
-            for x, y in _val_points(run, "val/global_train_tokens"):
-                by_x[x].append(y)
-        if not by_x:
+    for orthogonalizer_type in ORTHOGONALIZER_ORDER:
+        run = indexed.get((orthogonalizer_type, "train"))
+        if run is None:
             continue
-        xs = sorted(by_x)
-        ys = [mean(by_x[x]) for x in xs]
+        points = sorted(_val_points(run, "val/global_train_tokens"))
+        if not points:
+            continue
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
         any_series = True
-        plt.plot(xs, ys, color=ORTH_COLOR[orth], linewidth=2.2, label=ORTH_LABEL[orth])
+        plt.plot(
+            xs,
+            ys,
+            color=ORTHOGONALIZER_COLOR[orthogonalizer_type],
+            linewidth=2.2,
+            label=ORTHOGONALIZER_LABEL[orthogonalizer_type],
+        )
     if not any_series:
         plt.close()
         return
@@ -101,23 +123,19 @@ def plot_benchmark_wall_clock(runs: list[dict], out_dir: Path) -> None:
     """Bar chart of end-to-end benchmark wall-clock time per orth."""
     import matplotlib.pyplot as plt
 
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for run in runs:
-        grouped.setdefault(run.get("orth", ""), []).append(run)
+    indexed = _index_runs(runs)
 
     labels, values, colors = [], [], []
-    for orth in ORTH_ORDER:
-        orth_runs = grouped.get(orth, [])
-        wall_times = []
-        for run in orth_runs:
-            wall_time = _last_metric(run, "benchmark/wall_clock_s")
-            if wall_time is not None:
-                wall_times.append(wall_time)
-        if not wall_times:
+    for orthogonalizer_type in ORTHOGONALIZER_ORDER:
+        run = indexed.get((orthogonalizer_type, "benchmark"))
+        if run is None:
             continue
-        labels.append(ORTH_LABEL[orth])
-        values.append(mean(wall_times))
-        colors.append(ORTH_COLOR[orth])
+        wall_time = _last_metric(run, "benchmark/wall_clock_s")
+        if wall_time is None:
+            continue
+        labels.append(ORTHOGONALIZER_LABEL[orthogonalizer_type])
+        values.append(wall_time)
+        colors.append(ORTHOGONALIZER_COLOR[orthogonalizer_type])
     if not labels:
         return
     plt.figure(figsize=(8, 5))
@@ -132,26 +150,22 @@ def plot_benchmark_wall_clock(runs: list[dict], out_dir: Path) -> None:
 
 
 def plot_final_val_loss_bars(runs: list[dict], out_dir: Path) -> None:
-    """Bar chart of final val/loss per orth."""
+    """Bar chart of final train-mode val/loss per orth."""
     import matplotlib.pyplot as plt
 
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for run in runs:
-        grouped.setdefault(run.get("orth", ""), []).append(run)
+    indexed = _index_runs(runs)
 
     labels, values, colors = [], [], []
-    for orth in ORTH_ORDER:
-        orth_runs = grouped.get(orth, [])
-        orth_values = []
-        for run in orth_runs:
-            v = _last_metric(run, "val/loss")
-            if v is not None:
-                orth_values.append(v)
-        if not orth_values:
+    for orthogonalizer_type in ORTHOGONALIZER_ORDER:
+        run = indexed.get((orthogonalizer_type, "train"))
+        if run is None:
             continue
-        labels.append(ORTH_LABEL[orth])
-        values.append(mean(orth_values))
-        colors.append(ORTH_COLOR[orth])
+        value = _last_metric(run, "val/loss")
+        if value is None:
+            continue
+        labels.append(ORTHOGONALIZER_LABEL[orthogonalizer_type])
+        values.append(value)
+        colors.append(ORTHOGONALIZER_COLOR[orthogonalizer_type])
     if not labels:
         return
     plt.figure(figsize=(8, 5))
@@ -165,19 +179,17 @@ def plot_final_val_loss_bars(runs: list[dict], out_dir: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", default="results/figures")
-    parser.add_argument("--orths", nargs="*", default=None)
-    args = parser.parse_args()
-
     runs_dir = (ROOT / "runs").resolve()
-    out_dir = (ROOT / args.out_dir).resolve()
+    out_dir = (ROOT / "results" / "figures").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    orths = set(args.orths) if args.orths else None
 
-    runs = _load_runs(runs_dir, orths)
+    if not runs_dir.exists():
+        print(f"No runs directory found: {runs_dir}")
+        return 0
+
+    runs = _load_runs(runs_dir)
     if not runs:
-        print("No run metrics found.")
+        print(f"No run metrics found under {runs_dir}")
         return 0
 
     plot_val_loss_vs_tokens(runs, out_dir)

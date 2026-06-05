@@ -22,10 +22,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"],
                         default="fast", help="Orthogonalization strategy")
     parser.add_argument("--data-path", required=True, help="Path to training data directory")
-    parser.add_argument("--benchmark", action="store_true",
-                        help="Enable wall-clock timing measurements (adds cuda synchronize)")
-    parser.add_argument("--spectral", action="store_true",
-                        help="Enable spectral metric collection on optimizer states")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--benchmark", action="store_true",
+                            help="Enable wall-clock timing measurements (adds cuda synchronize)")
+    mode_group.add_argument("--spectral", action="store_true",
+                            help="Enable spectral metric collection on optimizer states")
     args = parser.parse_args()
     args.name = default_run_name(args.orth)
     return args
