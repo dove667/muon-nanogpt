@@ -44,10 +44,15 @@ def _summarize_single_run(run_dir: Path) -> dict | None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     vals = [row for row in rows if "val/loss" in row]
     specs = [row for row in rows if "spec/sample_count" in row]
-    final_row = rows[-1]
     final_val = vals[-1] if vals else {}
     final_spec = specs[-1] if specs else {}
     mode = _detect_mode(rows)
+
+    def _last_metric(key: str) -> object | None:
+        for row in reversed(rows):
+            if key in row:
+                return row[key]
+        return None
 
     val_token_points = [
         (float(row["val/global_train_tokens"]), float(row["val/loss"]))
@@ -66,10 +71,10 @@ def _summarize_single_run(run_dir: Path) -> dict | None:
         "final_val_loss": final_val.get("val/loss"),
         "best_val_loss": min((row["val/loss"] for row in vals), default=None),
         "val_auc_tokens": _auc(val_token_points),
-        "benchmark_wall_clock_s": final_row.get("benchmark/wall_clock_s"),
-        "spec_g_post_semi_orth_error": final_spec.get("spec/g_post_semi_orth_error"),
-        "peak_allocated_mb": final_row.get("memory/peak_allocated_mb"),
-        "status": final_row.get("status", "running_or_incomplete"),
+        "benchmark_wall_clock_s": _last_metric("benchmark/wall_clock_s"),
+        "spec_g_post_semi_orth_error": _last_metric("spec/g_post_semi_orth_error"),
+        "peak_allocated_mb": _last_metric("memory/peak_allocated_mb"),
+        "status": _last_metric("status") or "running_or_incomplete",
     }
 
 

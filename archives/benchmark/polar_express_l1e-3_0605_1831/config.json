@@ -37,7 +37,7 @@
   "pe_cushion": 0.02,
   "pe_lower_bound": "1e-3",
   "pe_safety_factor": 0.02,
-  "run_name": "polar_express_l1e-3_0605_1630",
+  "run_name": "polar_express_l1e-3_0605_1831",
   "seed": 0,
   "seq_len": 2048,
   "stable_steps": null,
