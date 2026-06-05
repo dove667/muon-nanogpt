@@ -86,7 +86,7 @@ src/
 - 无单元测试、无 linter、无 typechecker 配置——验证靠训练实验
 - `5090_results/` 是历史存档，**禁止修改**
 - 数据格式：FineWeb-10B 预分词 BOS 对齐 shard（`fineweb_train_*.bin` / `fineweb_val_*.bin`）
-- 每轮训练默认输出到 `runs/<name>/`（`config.json` + `metrics.jsonl`）；如需按模式管理，可在训练后整理到 `runs/train/` `runs/benchmark/` `runs/spectral/`
+- 每轮训练默认输出到 `runs/<name>/`（`config.json` + `metrics.jsonl`）；`runs/` 只保留当前分析集，历史 run 要移到 `runs/` 外归档；当前分析集可整理到 `runs/train/` `runs/benchmark/` `runs/spectral/`
 - 无 W&B，所有日志为本地 JSONL
 - 所有运行命令使用 `python -m <module>` 格式
 

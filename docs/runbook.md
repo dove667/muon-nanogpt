@@ -8,7 +8,7 @@ RTX 4090 (24GB VRAM) 单卡，CUDA 12.1，PyTorch 2.5.1+cu121。当前代码没�
 
 ## 配置
 
-所有固定超参数集中在 `src/config/config.yaml`，修改后对全部实验生效。CLI 只暴露必须变化的 2 个参数，外加 2 个互斥诊断 flag。
+所有固定超参数集中在 `src/config/config.yaml`，修改后对全部实验生效。
 
 当前固定训练栈：
 
@@ -106,18 +106,10 @@ python scripts/download_fineweb.py [num_chunks]
 | `config.json` | 实验配置快照（run_name、固定 seed、base_lr、train_token_budget、orth_config） |
 | `metrics.jsonl` | 该 run 对应模式下的时序指标 |
 
-推荐在训练完成后按模式分目录整理 `runs/`，例如：
+`runs/` 是当前分析工作区，不是历史实验仓库。运行 `analysis/`下的脚本是一定要：
 
-```text
-runs/
-  train/
-    0605_1012_fast/
-    0605_1013_manual/
-  benchmark/
-    0605_1110_fast/
-  spectral/
-    0605_1208_fast/
-```
+- `runs/` 里只保留当前要分析的一组 run
+- 同一个 `orthogonalizer_type + mode` 在 `runs/` 下只能出现一次
 
 分析脚本会递归扫描 `runs/` 下所有 `metrics.jsonl`，自动根据日志键把 run 判成 `train` / `benchmark` / `spectral`：
 

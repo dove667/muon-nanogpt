@@ -10,7 +10,6 @@
 - `benchmark`：记录端到端 wall-clock
 - `spectral`：记录频谱与正交统计
 
-训练输出统一写入 `runs/`；训练后可按 `train/`、`benchmark/`、`spectral/` 子目录整理，分析脚本会递归读取。分析输出统一写入 `results/summary.csv` 和 `results/figures/`。
 
 ## 系统环境
 
