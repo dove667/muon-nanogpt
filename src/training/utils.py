@@ -26,16 +26,18 @@ def setup_device(*, base_seed: int = FIXED_SEED) -> torch.device:
 def default_run_name(orth: str) -> str:
     orth_cfg = get_orthogonalization()
     timestamp = datetime.now().strftime("%m%d_%H%M")
+    ns_iterations = int(orth_cfg._data.get("ns_iterations", orth_cfg.default_iterations))
+    pe_iterations = int(orth_cfg._data.get("pe_iterations", ns_iterations))
     if orth == "adamw":
         return f"adamw_{timestamp}"
     if orth == "vanilla":
-        return f"vanilla_{timestamp}"
+        return f"stable{ns_iterations}_{timestamp}"
     if orth == "fast":
-        return f"fast_{timestamp}"
+        return f"fast{ns_iterations}_{timestamp}"
     if orth == "manual":
-        return f"manual_f{orth_cfg.fast_steps}_s{orth_cfg.stable_steps}_{timestamp}"
+        return f"manual_T{ns_iterations}_f{orth_cfg.fast_steps}_s{orth_cfg.stable_steps}_{timestamp}"
     if orth == "polar_express":
-        return f"polar_express_l{orth_cfg.pe_lower_bound}_{timestamp}"
+        return f"pe_T{pe_iterations}_l{orth_cfg.pe_lower_bound}_{timestamp}"
     raise SystemExit(f"Unknown orth={orth}")
 
 

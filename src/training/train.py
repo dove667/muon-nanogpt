@@ -21,18 +21,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orth", choices=["adamw", "vanilla", "fast", "manual", "polar_express"],
                         default="fast", help="Orthogonalization strategy")
     parser.add_argument("--data-path", required=True, help="Path to training data directory")
+    parser.add_argument("--name", default=None, help="Run directory name. Defaults to a timestamped name.")
+    parser.add_argument("--seed", type=int, default=FIXED_SEED, help="Random seed")
+    parser.add_argument("--train-token-budget", type=int, default=None,
+                        help="Override training.train_token_budget")
+    parser.add_argument("--eval-interval-tokens", type=int, default=None,
+                        help="Override training.eval_interval_tokens")
+    parser.add_argument("--eval-tokens", type=int, default=None,
+                        help="Override training.eval_tokens")
+    parser.add_argument("--log-every-steps", type=int, default=None,
+                        help="Override training.log_every_steps")
+    parser.add_argument("--spectral-interval-tokens", type=int, default=None,
+                        help="Override training.spectral_interval_tokens")
+    parser.add_argument("--spectral-num-matrices", type=int, default=None,
+                        help="Override training.spectral_num_matrices")
+    parser.add_argument("--spectral-dim-cap", type=int, default=None,
+                        help="Override training.spectral_dim_cap")
+    parser.add_argument("--lr-mul", type=float, default=None, help="Override optimizer.lr_mul")
+    parser.add_argument("--ns-iterations", type=int, default=None,
+                        help="Newton-Schulz iterations for vanilla/fast/manual modes")
+    parser.add_argument("--fast-steps", type=int, default=None,
+                        help="Manual schedule fast coefficient steps")
+    parser.add_argument("--stable-steps", type=int, default=None,
+                        help="Manual schedule stable coefficient steps")
+    parser.add_argument("--pe-lower-bound", default=None, help="Polar Express lower bound")
+    parser.add_argument("--pe-iterations", type=int, default=None,
+                        help="Polar Express iteration count")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--benchmark", action="store_true",
                             help="Enable wall-clock timing measurements (adds cuda synchronize)")
     mode_group.add_argument("--spectral", action="store_true",
                             help="Enable spectral metric collection on Muon update objects")
     args = parser.parse_args()
-    args.name = default_run_name(args.orth)
+    apply_cli_overrides(args)
+    if args.name is None:
+        args.name = default_run_name(args.orth)
     return args
+
+
+def apply_cli_overrides(args: argparse.Namespace) -> None:
+    training_overrides = {
+        "train_token_budget": args.train_token_budget,
+        "eval_interval_tokens": args.eval_interval_tokens,
+        "eval_tokens": args.eval_tokens,
+        "log_every_steps": args.log_every_steps,
+        "spectral_interval_tokens": args.spectral_interval_tokens,
+        "spectral_num_matrices": args.spectral_num_matrices,
+        "spectral_dim_cap": args.spectral_dim_cap,
+    }
+    for key, value in training_overrides.items():
+        if value is not None:
+            TRAINING._data[key] = value
+
+    if args.lr_mul is not None:
+        OPTIMIZER._data["lr_mul"] = args.lr_mul
+
+    orth_cfg = get_orthogonalization()
+    if args.ns_iterations is not None:
+        orth_cfg._data["ns_iterations"] = args.ns_iterations
+        orth_cfg._data["default_iterations"] = args.ns_iterations
+    if args.fast_steps is not None:
+        orth_cfg._data["fast_steps"] = args.fast_steps
+    if args.stable_steps is not None:
+        orth_cfg._data["stable_steps"] = args.stable_steps
+    if args.pe_lower_bound is not None:
+        orth_cfg._data["pe_lower_bound"] = args.pe_lower_bound
+    if args.pe_iterations is not None:
+        orth_cfg._data["pe_iterations"] = args.pe_iterations
 
 
 def dispatch_orth_state(orth: str) -> tuple[list[tuple[float, float, float]], float, dict[str, object], float]:
     orth_cfg = get_orthogonalization()
+    ns_iterations = int(orth_cfg._data.get("ns_iterations", orth_cfg.default_iterations))
+    pe_iterations = int(orth_cfg._data.get("pe_iterations", ns_iterations))
     coeff_schedule = build_coeff_schedule(
         orth,
         fast_steps=int(orth_cfg.fast_steps),
@@ -40,6 +101,8 @@ def dispatch_orth_state(orth: str) -> tuple[list[tuple[float, float, float]], fl
         pe_lower_bound_raw=orth_cfg.pe_lower_bound,
         pe_cushion=float(orth_cfg.pe_cushion),
         pe_safety_factor=float(orth_cfg.pe_safety_factor),
+        ns_iterations=ns_iterations,
+        pe_iterations=pe_iterations,
     )
     norm_factor = orth_norm_factor(orth, float(orth_cfg.pe_safety_factor))
     record = orth_record(
@@ -51,6 +114,8 @@ def dispatch_orth_state(orth: str) -> tuple[list[tuple[float, float, float]], fl
         pe_cushion=float(orth_cfg.pe_cushion),
         pe_safety_factor=float(orth_cfg.pe_safety_factor),
         lr_mul=float(OPTIMIZER.lr_mul),
+        ns_iterations=ns_iterations,
+        pe_iterations=pe_iterations,
     )
     base_lr = float(OPTIMIZER.base_lr_adamw if orth == "adamw" else OPTIMIZER.base_lr_muon)
     return coeff_schedule, norm_factor, record, base_lr
@@ -65,6 +130,7 @@ def run_validation(
     step: int,
     train_steps: int,
     global_train_tokens: int,
+    elapsed_s: float,
 ) -> None:
     val_tokens = int(TRAINING.eval_tokens)
     model.eval()
@@ -86,6 +152,7 @@ def run_validation(
         "val/loss": float(val_loss),
         "val/ppl": float(math.exp(min(float(val_loss), TRAINING.val_ppl_max))),
         "val/global_train_tokens": int(global_train_tokens),
+        "val/global_wall_time_s": float(elapsed_s),
         "train/step": int(step),
     }
 
@@ -113,6 +180,7 @@ def run_training_loop(
     global_train_tokens = 0
     next_eval_tokens = TRAINING.eval_interval_tokens
     next_spectral_tokens = TRAINING.spectral_interval_tokens
+    t_start = time.perf_counter()
 
     if benchmark:
         torch.cuda.synchronize()
@@ -129,6 +197,7 @@ def run_training_loop(
                 model=model, device=device, val_data_path=val_data_path,
                 logger=logger, step=step, train_steps=train_steps,
                 global_train_tokens=global_train_tokens,
+                elapsed_s=time.perf_counter() - t_start,
             )
             if TRAINING.eval_interval_tokens > 0:
                 while next_eval_tokens <= global_train_tokens:
@@ -171,6 +240,7 @@ def run_training_loop(
                 "train/lr": float(primary_lr(optimizer)),
                 "train/tokens": int(global_train_tokens),
                 "train/step": int(step + 1),
+                "train/elapsed_s": float(time.perf_counter() - t_start),
             }
             logger.log_metric(record)
 
@@ -216,7 +286,7 @@ def main() -> None:
 
     logger = Logger(
         run_name=args.name,
-        seed=FIXED_SEED,
+        seed=args.seed,
         base_lr=base_lr,
         orth_record=orth_record_data,
         run_dir=run_dir,
@@ -231,7 +301,7 @@ def main() -> None:
         print(f"mode:     spectral")
     print("=" * 80)
 
-    device = setup_device(base_seed=FIXED_SEED)
+    device = setup_device(base_seed=args.seed)
 
     print(f"PyTorch {torch.__version__}  CUDA {torch.version.cuda} on device {device}")
     print(f"Python  {sys.version}")

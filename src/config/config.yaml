@@ -47,6 +47,7 @@ optimizer:
 orthogonalization:
   default_iterations: 5
   ns_iterations: 5              # Newton-Schulz iterations for vanilla/fast/polar_express
+  pe_iterations: 5              # Polar Express iterations
 
   fast_steps: 3                 # manual mode default
   stable_steps: 2               # manual mode default
