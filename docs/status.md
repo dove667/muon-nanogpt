@@ -42,6 +42,7 @@
 - 修复 spectral 空样本 run 的记录口径：即使某次采样没有 Muon 候选矩阵，也会写入 `spec/sample_count=0`，避免后处理把 `--spectral` run 误判成普通 train
 - 谱分析可视化功能并入 `plot_curves.py`，通过 `--spectral` 数据自动触发，不再使用独立的 `plot_spectral.py`
 - 全部 train / benchmark / spectral 实验完成，当前文档结论已同步到 `docs/report.md`
+- 新增 `docs/final_report/final_report.tex` 与 `docs/final_report/references.bib`，按课程 PDF 的四段结构起草英文 final report，并直接引用 `results/` 中的训练、benchmark 与谱分析图表
 
 ## 固定训练栈
 

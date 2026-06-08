@@ -7,15 +7,6 @@ from torch import nn
 SPECTRAL_OBJECTS = ("buffer_post", "g_pre", "g_post")
 
 
-def current_grad_norm(model: nn.Module) -> float:
-    total = 0.0
-    for param in model.parameters():
-        if param.grad is not None:
-            grad = param.grad.detach().float()
-            total += float(grad.square().sum().item())
-    return math.sqrt(total)
-
-
 def downsample_matrix_for_svd(mat: torch.Tensor, svd_dim_cap: int) -> torch.Tensor:
     mat = mat.detach().float()
     if svd_dim_cap <= 0:
