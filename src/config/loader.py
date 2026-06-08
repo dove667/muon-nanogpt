@@ -13,7 +13,7 @@ class _Loader:
 
     @staticmethod
     def load(path: Path = _CONFIG_PATH) -> "_Loader":
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return _Loader(yaml.safe_load(f))
 
     def __getattr__(self, name: str) -> Any:

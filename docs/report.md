@@ -1,132 +1,355 @@
-# Muon 系数调度实验结果分析
+# Muon 系数序列实验结果
 
-## 1. 训练结果
+## 0. 研究问题
 
-### 1.1 最终验证损失
+Muon 会把矩阵参数的更新方向做近似正交化。我们研究的问题是：
 
-| Orthogonalizer | Final Val Loss | Best Val Loss | Val-Loss AUC | Peak Memory (MiB) |
-|---|---:|---:|---:|---:|
-| AdamW | 5.5183 | 5.5182 | 6.1312 | 8380 |
-| Vanilla | 4.5323 | 4.5323 | 5.3225 | 8074 |
-| Manual | 4.3147 | 4.3147 | 5.0291 | 8074 |
-| Fast | 4.2807 | 4.2807 | 4.9354 | 8074 |
-| Polar Express | 4.2896 | 4.2896 | 4.9342 | 8074 |
+```text
+在模型、数据、训练 token 数、batch 设置和 learning rate schedule 固定时，
+不同 Newton-Schulz / Polar Express 系数序列会如何影响：
 
-![val loss](../results/train/figures/val_loss_vs_tokens.png)
+1. validation loss
+2. wall-clock time
+3. update matrix 的谱几何
+```
 
-训练结果呈现出清晰的两层结构。首先，Muon 家族整体显著优于 AdamW。AdamW 的最终验证损失为 `5.5183`，而四个 Muon 变体全部落在 `4.28` 至 `4.53` 区间，说明在当前 100M token 训练预算和固定模型规模下，矩阵参数的半正交更新对优化质量具有决定性影响。其次，Muon 内部不同系数调度之间也形成了稳定排序：`fast` 最优，`polar_express` 与其几乎并列，`manual_f3_s2` 次之，`vanilla` 最弱。
+这里的核心对象不是“调很多超参数”，而是正交化迭代中的系数序列。
 
-这一结果说明，在当前控制条件下，真正驱动优化效果差异的是五次迭代内部的系数安排。不同调度对应不同的奇异值映射，因此会诱导不同的更新几何。当前结果表明，`fast` 与 `polar_express` 更接近有利于优化的更新结构；`manual_f3_s2` 在此基础上保留了部分优势；`vanilla` 则相对更保守，因此在最终收敛质量上明显落后。
+每一步 Newton-Schulz-style 映射可写成：
 
-从数值上看，`fast` 与 `polar_express` 的最终验证损失仅相差约 `0.009`，二者处于同一性能梯队。相较之下，`vanilla` 与前三者之间的差距已经足够大，不能再视为同一水平上的微小波动。
+\[
+p(\sigma)=a\sigma+b\sigma^3+c\sigma^5.
+\]
 
-### 1.2 阈值收敛剖面
+其中 \(\sigma\) 是 update matrix 的奇异值。多步 schedule 对应复合映射：
 
-为了更直观地比较优化效率，可以观察各方法首次达到若干固定验证损失阈值时所消耗的训练 token 数：
+\[
+p_T(\sigma)=p_T\circ p_{T-1}\circ\cdots\circ p_1(\sigma).
+\]
 
-| Orthogonalizer | Tokens to Val Loss ≤ 7.0 | Tokens to Val Loss ≤ 6.0 | Tokens to Val Loss ≤ 5.5 |
-|---|---:|---:|---:|
-| AdamW | 14.02M | 48.10M | 未达到 |
-| Vanilla | 8.13M | 22.02M | 36.04M |
-| Manual | 6.03M | 16.12M | 26.08M |
-| Fast | 6.03M | 14.02M | 22.02M |
-| Polar Express | 6.03M | 14.02M | 22.02M |
+## 1. 术语和实验代号
 
-这个剖面把训练曲线中的效率差异具体量化了出来。对较宽松的阈值 `7.0` 而言，四个 Muon 变体全部显著早于 AdamW，其中 `fast`、`manual` 与 `polar_express` 在约 `6.03M` token 就已达到，而 `adamw` 需要约 `14.02M` token，耗费超过两倍。`vanilla` 虽然仍优于 AdamW，但也已经开始落后于另外三种 Muon 调度。
+| 代号 | 含义 |
+|---|---|
+| AdamW | 不做矩阵正交化的 optimizer baseline |
+| stable5 | 5 步 stable Newton-Schulz 系数 |
+| fast5 | 5 步 fast Muon 系数，也是最重要 baseline |
+| manual_T5_f3_s2 | 总 5 步，前 3 步 fast，后 2 步 stable |
+| manual_T9_f4_s5 | 总 9 步，前 4 步 fast，后 5 步 stable |
+| pe_T5_l1e-3 | Polar Express，5 步，lower bound 为 \(10^{-3}\) |
+| pe_T9_l3e-5 | Polar Express，9 步，lower bound 为 \(3\times10^{-5}\) |
 
-当阈值收紧到 `6.0` 时，排序进一步分化。`fast` 与 `polar_express` 率先在约 `14.02M` token 达到该阈值，`manual_f3_s2` 稍慢，在 `16.12M` token 达到，`vanilla` 则需要 `22.02M` token，已经明显掉出第一梯队。AdamW 直到 `48.10M` token 才首次降到 `6.0` 以下，这意味着在训练中期，Muon 家族相对 AdamW 的优化效率优势已经非常显著。
+fast / stable 是两组固定系数：
 
-对更具区分度的阈值 `5.5`，差异变得更加鲜明。`fast` 与 `polar_express` 均在 `22.02M` token 达到该水平，`manual_f3_s2` 需要 `26.08M` token，`vanilla` 则要到 `36.04M` token 才达到；AdamW 在 100M token 预算内始终未能达到 `5.5`。因此，从“达到相同验证损失需要多少 token”这一角度看，`fast` 与 `polar_express` 不仅最终点更优，而且在相当长的训练区间内都保持着最强的 token efficiency。
+```text
+fast   = (3.4445, -4.7750, 2.0315)
+stable = (2.0,    -1.5,    0.5)
+```
 
-这一阈值分析与 `val-loss AUC` 的排序完全一致：`polar_express` 与 `fast` 最优，`manual_f3_s2` 居中，`vanilla` 较弱，AdamW 明显落后。相比仅仅比较最终验证损失，这种剖面分析进一步说明，系数调度带来的差异不是只体现在训练末尾，而是已经系统性地改变了整个收敛过程。
+## 2. 指标
 
-## 2. Benchmark 结果
+| 指标 | 怎么看 |
+|---|---|
+| final validation loss | 训练结束时的验证集 loss，越低越好 |
+| val-loss AUC | validation loss 曲线面积，越低表示整体学习更快 |
+| wall-clock | 真实运行时间，越低越快 |
+| g_post semi-orth error | 正交化后 update matrix 的半正交误差，越低表示越接近正交目标 |
+| attention / MLP error | 分别统计 attention projection 和 MLP 矩阵的 g_post error |
+| gain | \(p_T(\sigma)/\sigma\)，表示某个奇异值经过 schedule 后被放大多少倍 |
 
-### 2.1 端到端 Wall-Clock
+`gain` 只用于解释多项式映射，不是训练指标。
+例如 \(gain=100\) 表示输入奇异值 \(\sigma\) 被映射到约 \(100\sigma\)。
 
-| Orthogonalizer | Wall Clock (s) | Relative to Muon Mean | Peak Memory (MiB) |
-|---|---:|---:|---:|
-| AdamW | 1063.99 | -6.5% | 8380 |
-| Vanilla | 1133.54 | +0.07% | 8074 |
-| Manual | 1132.34 | -0.04% | 8074 |
-| Fast | 1132.71 | -0.01% | 8074 |
-| Polar Express | 1132.58 | -0.02% | 8074 |
+## 3. 旧实验已经得到的结论
 
-![wall clock](../results/benchmark/figures/benchmark_wall_clock.png)
-benchmark 结果同样呈现出两层结构。第一层是 AdamW 与 Muon 家族之间的差异。AdamW 的总 wall-clock 为 `1063.99s`，而四个 Muon 变体全部落在 `1132.3s` 至 `1133.5s` 区间，整体快约 `68.8s`，相对差距约 `6.5%`。这说明 Muon 的额外正交化步骤确实带来了可见的系统成本。
+旧实验是固定 T=5 的单 seed 对照，比较：
 
-第二层则是 Muon 内部不同调度之间的比较。在这一层上，结果几乎完全重合。四个 Muon 变体的最大时间差仅为 `1.20s`，相对 Muon 家族均值的偏差不超过 `0.07%`。因此，在当前实现和当前实验规模下，改变系数调度并不会带来可辨识的端到端 wall-clock 分化。
+```text
+AdamW / stable5 / manual_T5_f3_s2 / fast5 / Polar Express T=5
+```
 
-这一现象与实现细节完全一致。四种 Muon 调度共享同一计算图：迭代次数、张量形状和每轮执行的矩阵算子类型都完全一致，变化的只有标量系数。因此，从 GPU 执行角度看，它们的 FLOPs、kernel 数量和访存模式几乎相同，最终得到近乎一致的 wall-clock 是预期之内的结果。
+主要结论：
 
-AdamW 比 Muon 更快的原因在于算法复杂度的差异：Muon 的每次更新不仅要完成动量累积，还要额外执行 Newton-Schulz 正交化迭代（多次矩阵乘法和逐元素运算），而 AdamW 仅需一阶/二阶矩指数移动平均和一个逐元素更新步。在当前实现中，两条路径均由相同编程风格的手写 Torch 张量操作构成（均在 `normuon.py` 中），不存在一方受益于底层 fused kernel 而另一方未受益的差异。因此，`6.5%` 的 wall-clock 差距直接反映的是正交化步骤本身带来的计算增量，而非实现成熟度的差异。
+1. Muon 系列明显优于 AdamW。
+2. stable5 明显弱于 fast5。
+3. manual_T5_f3_s2 介于 stable5 和 fast5 之间。
+4. 同样 T=5 时，Muon 内部 wall-clock 基本一样。
+5. PE 的 g_post error 最低，说明几何上更接近半正交。
 
+这些结论主要来自：
 
-## 3. 谱分析结果
+```text
+results/train/summary.csv
+results/benchmark/summary.csv
+results/spectral/summary.csv
+```
 
-### 3.1 `g_post` 半正交误差
+## 4. 新实验 A：固定 T=5，比不同系数序列
 
-| Orthogonalizer | Mean `g_post` Semi-Orth Error | Peak Memory (MiB) |
+目的：控制迭代步数 T=5，只比较系数序列。
+
+| schedule | final val loss | val-loss AUC |
 |---|---:|---:|
-| Vanilla | 0.9004 | 8863 |
-| Manual | 0.6854 | 8863 |
-| Fast | 0.6489 | 8863 |
-| Polar Express | 0.5424 | 8863 |
+| AdamW | 5.373726 | 5.967695 |
+| stable5 | 4.527259 | 5.316559 |
+| manual_T5_f3_s2 | 4.317646 | 5.029547 |
+| fast5 | 4.282755 | 4.934028 |
+| pe_T5_l3e-3 | 4.287261 | 4.946200 |
+| pe_T5_l1e-3 | 4.290226 | 4.933800 |
 
-谱分析结果进一步揭示了不同调度之间的几何差异。以正交化后的更新对象 `g_post` 为代表，四种 Muon 调度的半正交误差排序为
+结论：T=5 固定时，系数序列确实影响训练。`fast5` 明显强于 `stable5`，`manual_T5_f3_s2` 介于两者之间。
 
-`polar_express < fast < manual < vanilla`。
+结论强度：强。差距远大于 multi-seed 中约 0.003-0.005 的 seed 波动。
 
-**这一排序与训练结果中的验证损失排序高度一致：几何上更接近半正交的更新，通常也对应更优的最终优化表现**。特别是 `polar_express` 在谱分析中取得了最小的 `g_post` 半正交误差，而 `fast` 以很小差距位居第二；`manual_f3_s2` 明显优于 `vanilla`，但仍落后于前两者。
+相关图：
 
-![orth over token](../results/spectral/figures/g_post_semi_orth_error_vs_tokens.png)
+```text
+results/followup_4090_20260608/figures/final_val_loss_by_schedule.png
+results/followup_4090_20260608/figures/val_loss_vs_tokens.png
+```
 
-更重要的是，这一排序并不是仅在训练末尾出现的局部现象。上图可见，从约 `10M` token 起，四种调度的曲线便迅速拉开，并在后续训练过程中保持稳定层级关系。这表明不同系数调度诱导的谱几何差异在训练早期就已形成，并持续贯穿整个优化过程。
+图怎么看：
 
-### 3.2 正交化前后对比
+```text
+val_loss_vs_tokens:
+横轴是训练 token，纵轴是 validation loss。
+同一横坐标下，曲线越低表示同样数据量学得越好。
 
-按 detail-level 数据对 `buffer_post`、`g_pre` 与 `g_post` 进行聚合，可得到如下均值：
+final_val_loss_by_schedule:
+每个柱子是一种 schedule 的最终 loss。
+柱子越低越好。
+```
 
-| Orthogonalizer | `buffer_post` Error | `g_pre` Error | `g_post` Error |
-|---|---:|---:|---:|
-| Vanilla | 5.0407 | 5.1280 | 0.9229 |
-| Manual | 3.2941 | 3.3387 | 0.7262 |
-| Fast | 3.4460 | 3.4971 | 0.6598 |
-| Polar Express | 3.3158 | 3.3560 | 0.5561 |
+## 5. 新实验 B：多项式映射和 gain
 
-![object orth](../results/spectral/figures/object_semi_orth_error.png)
+目的：解释不同系数序列为什么会产生不同几何行为。
 
-这一结果说明，谱分析管线确实捕获到了“正交化前后”的几何变化。`buffer_post` 与 `g_pre` 的半正交误差普遍仍在 `3` 至 `5` 的量级，而经过正交化之后，`g_post` 的误差会显著下降到 `0.5` 至 `0.9` 区间。由上图可见，这一下降不是个别层的偶然现象，而是所有 Muon 调度共有的结构性特征。
+证据：
 
-不过，`g_pre` 并不是一个“几乎没有差异”的对象。按全局均值看，`g_pre` 的半正交误差从 `vanilla` 的 `5.1280` 到 `manual`、`fast`、`polar_express` 的约 `3.34` 至 `3.50`，已经体现出由训练轨迹累积出来的明显分化。因此，更准确的说法是：不同调度的差异在进入正交化之前就已经存在，但正交化步骤会在这一基础上进一步压缩误差，并把 Muon 内部的几何层级拉得更清楚。
+```text
+results/followup_4090_20260608/polynomial_maps/map_samples.csv
+results/followup_4090_20260608/polynomial_maps/composed_maps.png
+results/followup_4090_20260608/polynomial_maps/composed_map_delta.png
+```
 
-这一点在 `manual`、`fast` 与 `polar_express` 三者之间尤其明显。三者的 `g_pre` 误差都集中在 `3.34` 至 `3.50` 的狭窄区间内，但经过正交化之后，`g_post` 误差分别下降到 `0.7262`、`0.6598` 与 `0.5561`，排序被进一步拉开。换言之，调度差异既会通过长期训练动力学反映到 `g_pre` 上，也会通过正交化映射本身在 `g_post` 层面得到进一步放大和重排。
+在 \(\sigma=10^{-5}\) 时：
 
-### 3.3 Attention 与 MLP 的分解
+| schedule | gain |
+|---|---:|
+| stable5 | 32 |
+| fast5 | 485 |
+| manual_T9_f4_s5 | 4502 |
+| pe_T9_l3e-5 | 71309 |
 
-按模块类型拆分 `g_post` 半正交误差，可得：
+结论：这些 schedule 对小奇异值的放大强度完全不同。
+这说明它们改变的是谱映射 \(p_T(\sigma)\)，不是普通标签。
 
-| Orthogonalizer | Attention Error | MLP Error |
+结论强度：强。多项式映射是确定性计算，不受训练随机性影响。
+
+图怎么看：
+
+```text
+composed_maps:
+横轴是输入奇异值 sigma，纵轴是经过完整 schedule 后的输出。
+越靠近 1，表示越强地把奇异值推向正交目标。
+
+composed_map_delta:
+纵轴是 p_T(sigma) - sigma。
+正值表示放大，负值表示压缩。
+```
+
+## 6. 新实验 C：manual iteration-depth trend
+
+目的：观察 manual fast-to-stable schedule 增加迭代步数后是否更好。
+
+注意：这不是严格的“只改变 T”实验，因为代表点的 fast/stable split 也随 T 变化。更准确地说，它是 manual family 的 depth trend。
+
+| schedule | final val loss | val-loss AUC |
 |---|---:|---:|
-| Vanilla | 0.9195 | 0.9263 |
-| Manual | 0.6880 | 0.7644 |
-| Fast | 0.5484 | 0.7713 |
-| Polar Express | 0.3994 | 0.7129 |
+| manual_T5_f3_s2 | 4.317646 | 5.029547 |
+| manual_T7_f4_s3 | 4.287305 | 4.931248 |
+| manual_T8_f5_s3 | 4.289020 | 4.925309 |
+| manual_T9_f3_s6 | 4.288733 | 4.927095 |
+| manual_T9_f4_s5 | 4.292259 | 4.926766 |
+| manual_T10_f5_s5 | 4.294906 | 4.928156 |
+| fast5 | 4.282755 | 4.934028 |
 
-![orth module](../results/spectral/figures/g_post_semi_orth_error_attn_vs_mlp.png)
+结论：manual 从 T=5 增加到 T=7/8/9/10 后明显追近 fast5，但没有稳定超过 fast5。
 
-这一分解揭示了更细的结构差异。首先，四种调度在 attention 分支上的区分度明显强于在 MLP 分支上的区分度。`fast` 相比 `manual_f3_s2` 的优势主要体现在 attention 矩阵上，而在 MLP 矩阵上二者差距缩小。其次，`polar_express` 在两类模块上都最优，尤其是在 attention 分支上优势最为显著。由上图可以直观看到这一点。
+结论强度：中。趋势清楚，但多数点是 seed0。
 
-这一结果意味着，不同系数调度对不同类型矩阵的影响并不均匀。至少在当前模型规模与采样口径下，attention 权重的谱几何似乎对调度变化更为敏感，因此也更可能成为不同调度性能分化的主要来源。
+相关图：
 
-## 4. 综合结论
+```text
+results/followup_4090_20260608/figures/manual_depth_final_loss.png
+```
 
-三组实验结果共同指向同一结论。
+图怎么看：
 
-第一，在当前控制条件下，Muon 内部不同系数调度的主要差异体现在优化结果和谱几何上，而不体现在端到端 wall-clock 上。四种 Muon 调度在 benchmark 时间上几乎完全重合，因此当前课题的有效比较维度应是验证损失和更新几何，而不是系统吞吐。
+```text
+每个点是一种 manual schedule。
+纵轴越低越好。
+它用于看 depth trend，不用于宣称“某个算法整体更强”。
+```
 
-第二，训练结果与谱分析结果具有一致的排序结构。`fast` 与 `polar_express` 给出了最优的一组验证损失；在谱几何上，`polar_express` 的半正交性最强，`fast` 次之，`manual_f3_s2` 再次，`vanilla` 最弱。这表明谱几何差异并非孤立诊断指标，而与最终优化表现存在明确对应关系。
+## 7. 新实验 D：PE lower-bound sensitivity
 
-第三，`fast` 与 `polar_express` 构成当前最有竞争力的两种调度。二者在训练结果上处于同一梯队，在 benchmark 成本上没有额外差别；差异主要体现在谱几何上，其中 `polar_express` 的正交化质量更强，而 `fast` 的最终验证损失略低。`manual_f3_s2` 可以理解为介于二者与 `vanilla` 之间的折中方案，`vanilla` 则在三类实验中均未体现出优势。
+目的：固定 PE T=5，只改变 lower bound。
 
-综上，当前实验支持如下判断：在当前 Muon 实现中，Newton-Schulz 系数调度首先是一个优化几何问题，而不是一个系统效率问题。对这一课题而言，最有研究价值的对象是调度如何改变更新矩阵的谱结构，以及这种谱结构变化如何进一步传导到训练收敛质量之中。
+| schedule | final val loss | val-loss AUC |
+|---|---:|---:|
+| pe_T5_l3e-3 | 4.287261 | 4.946200 |
+| pe_T5_l1e-3 | 4.290226 | 4.933800 |
+| pe_T5_l3e-4 | 4.299781 | 4.934898 |
+| pe_T5_l3e-5 | 4.312518 | 4.947870 |
+
+结论：PE lower bound 是实质参数。它改变奇异值区间假设，也改变训练结果。
+
+结论强度：中。足以说明 lower bound 敏感，但不是完整 lower-bound 全局最优搜索。
+
+相关图：
+
+```text
+results/followup_4090_20260608/figures/pe_lower_bound_final_loss.png
+```
+
+图怎么看：
+
+```text
+横轴是 PE lower bound，纵轴是 final validation loss。
+固定 T=5 时，柱子变化说明 lower bound 本身会影响结果。
+```
+
+## 8. 新实验 E：PE iteration depth
+
+目的：固定 lower bound 为 \(3\times10^{-5}\)，改变 PE iteration count。
+
+| schedule | final val loss | val-loss AUC |
+|---|---:|---:|
+| pe_T5_l3e-5 | 4.312518 | 4.947870 |
+| pe_T9_l3e-5 | 4.296119 | 4.928503 |
+| pe_T10_l3e-5 | 4.294432 | 4.927799 |
+| fast5 | 4.282755 | 4.934028 |
+
+结论：PE 增加 iteration depth 后 loss 变好，但仍没有超过 fast5。
+
+结论强度：中。只有代表点，不是完整 T=5..10 sweep。
+
+## 9. 新实验 F：spectral breakdown
+
+目的：看不同 schedule 是否真的改变 update geometry。
+
+| schedule | buffer_post error | g_pre error | g_post error |
+|---|---:|---:|---:|
+| stable5 | 3.0746 | 3.1320 | 0.9006 |
+| fast5 | 3.4377 | 3.4914 | 0.6444 |
+| manual_T9_f4_s5 | 3.7297 | 3.7885 | 0.4431 |
+| pe_T9_l3e-5 | 3.8317 | 3.9036 | 0.3781 |
+
+三个对象含义：
+
+```text
+buffer_post: momentum buffer 更新后的矩阵
+g_pre: 进入正交化前的 Nesterov mixed matrix
+g_post: 正交化后的 update matrix
+```
+
+attention / MLP 分解：
+
+| schedule | attention g_post error | MLP g_post error |
+|---|---:|---:|
+| fast5 | 0.5146 | 0.7743 |
+| manual_T9_f4_s5 | 0.1776 | 0.7086 |
+| pe_T9_l3e-5 | 0.0481 | 0.7081 |
+
+结论：manual_T9_f4_s5 和 pe_T9_l3e-5 明显降低 g_post error，尤其在 attention matrices 上。但它们的 validation loss 没有超过 fast5。
+
+结论强度：强。几何差异很大；但“几何更好为什么 loss 不一定更好”仍需要理论解释。
+
+相关图：
+
+```text
+results/followup_4090_20260608/figures/spectral_object_error_by_schedule.png
+results/followup_4090_20260608/figures/attention_vs_mlp_gpost_error.png
+```
+
+图怎么看：
+
+```text
+spectral_object_error_by_schedule:
+比较 buffer_post、g_pre、g_post 三个阶段。
+g_post 越低，说明正交化后的 update 越接近目标。
+
+attention_vs_mlp_gpost_error:
+分别看 attention 和 MLP 矩阵。
+结果显示 attention 上的区分度更大。
+```
+
+## 10. 新实验 G：multi-seed confirmation
+
+目的：确认代表配置的差距是否大于 seed noise。
+
+| schedule | seed0 | seed1 | seed2 | mean | std |
+|---|---:|---:|---:|---:|---:|
+| fast5 | 4.282755 | 4.292107 | 4.292769 | 4.289210 | 0.004573 |
+| manual_T9_f4_s5 | 4.292259 | 4.299827 | 4.296642 | 4.296243 | 0.003102 |
+| pe_T9_l3e-5 | 4.296119 | 4.304651 | 4.298659 | 4.299810 | 0.003577 |
+
+结论：当前 100M-token clean setup 下，fast5 是最稳的 practical baseline。
+
+结论强度：强，但只限当前模型和 100M token 设置。
+
+## 11. 新实验 H：LR sanity
+
+目的：确认结论不是因为某个 schedule 偶然拿到了更合适的 LR。
+
+| schedule | lr=0.5 | lr=1.0 | lr=2.0 |
+|---|---:|---:|---:|
+| fast5 | 4.781276 | 4.282755 | 4.858344 |
+| manual_T9_f4_s5 | 4.710713 | 4.292259 | 5.228550 |
+| pe_T9_l3e-5 | 4.700085 | 4.296119 | 5.302590 |
+
+结论：三个代表 schedule 都在 lr_mul=1.0 下最好。
+
+结论强度：中到强。每个 LR 是 seed0，但差距足够大。
+
+## 12. Benchmark
+
+| schedule | wall-clock |
+|---|---:|
+| AdamW | 1039.732s |
+| stable5 | 1094.865s |
+| fast5 | 1095.099s |
+| manual_T5_f3_s2 | 1099.423s |
+| manual_T9_f4_s5 | 1123.528s |
+| pe_T5_l3e-5 | 1098.117s |
+| pe_T9_l3e-5 | 1119.423s |
+
+结论：
+
+```text
+同 T=5 的 Muon variants wall-clock 很接近。
+T=9 manual/PE 会更慢一些。
+AdamW 更快，因为它没有矩阵正交化路径。
+```
+
+注意：当前代码中 AdamW 和 Muon 都是手写 Torch path。不要把 AdamW 更快解释成 fused kernel 差异。
+
+## 13. 最终结论
+
+1. 固定 T=5 时，系数序列会显著影响训练。
+2. fast Muon coefficients 是当前最强 practical baseline。
+3. stable Newton-Schulz 更保守，但在当前 LM 预训练中明显落后。
+4. manual/PE 可以显著改善正交化几何，尤其 attention matrices。
+5. 更低的 semi-orthogonality error 不必然带来更低 validation loss。
+6. PE lower bound 和 iteration depth 都是有数学含义的谱映射参数。
+7. AdamW 是 non-orthogonalization baseline，不是核心 orthogonalizer 对照。
+
+最适合汇报的主线：
+
+```text
+不同 Newton-Schulz / Polar Express 系数序列
+通过 composed singular-value map p_T(sigma)
+改变 update geometry；
+但更强的几何正交化不自动等价于更好的 validation loss。
+```
