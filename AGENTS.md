@@ -49,8 +49,7 @@ src/
 ├── optim/                       # 优化器（Muon + Adam + 正交化）
 │   ├── normuon.py               # NorMuonAndAdam, ParamConfig
 │   ├── manager.py               # build_optimizer, step_optimizer, compute_lr
-│   ├── orth.py                  # 系数调度, orth_record, orth_norm_factor
-│   ├── polar.py                 # make_polar_express
+│   ├── orth.py                  # 系数调度, orth_record, orth_norm_factor, make_orthogonalize_fn
 │   └── __init__.py
 ├── training/                    # 训练循环编排
 │   ├── train.py                 # 单次训练入口

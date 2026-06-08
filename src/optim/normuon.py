@@ -27,7 +27,6 @@ class NorMuonAndAdam:
         named_params,
         param_table: dict,
         scatter_order: list,
-        work_order: list,
         adam_defaults: dict,
         normuon_defaults: dict,
         orthogonalize_fn: callable,
@@ -37,7 +36,6 @@ class NorMuonAndAdam:
         self.normuon_defaults = normuon_defaults
         self.param_table = param_table
         self.scatter_order = scatter_order
-        self.work_order = work_order
 
         self.param_cfgs: dict[nn.Parameter, ParamConfig] = {}
         self.param_states: dict[nn.Parameter, dict] = {}
@@ -50,7 +48,7 @@ class NorMuonAndAdam:
             self._build_param_cfg(param, label)
 
         present = self._param_by_label.keys()
-        assert set(scatter_order) == present and set(work_order) == present
+        assert set(scatter_order) == present
         self._init_state()
 
     def _build_param_cfg(self, param: nn.Parameter, label: str) -> None:

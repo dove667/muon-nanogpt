@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from src.model.gpt import build_model
-from src.optim import build_optimizer, step_optimizer, build_coeff_schedule, make_polar_express, orth_norm_factor, orth_record
+from src.optim import build_optimizer, step_optimizer, build_coeff_schedule, make_orthogonalize_fn, orth_norm_factor, orth_record
 from src.config import TRAINING, OPTIMIZER, get_orthogonalization
 from src.training.utils import FIXED_SEED, default_run_name, resolve_data_path, setup_device, primary_lr
 from src.training.logger import Logger
@@ -211,7 +211,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
 
     coeff_schedule, norm_factor, orth_record_data, base_lr = dispatch_orth_state(args.orth)
-    polar_express = make_polar_express(coeff_schedule=coeff_schedule, norm_factor=norm_factor)
+    orthogonalize_fn = make_orthogonalize_fn(coeff_schedule=coeff_schedule, norm_factor=norm_factor)
     train_data_path, val_data_path = resolve_data_path(args.data_path)
 
     logger = Logger(
@@ -237,7 +237,7 @@ def main() -> None:
     print(f"Python  {sys.version}")
 
     model = build_model(device)
-    optimizer = build_optimizer(model, orth_mode=args.orth, polar_express=polar_express)
+    optimizer = build_optimizer(model, orth_mode=args.orth, orthogonalize_fn=orthogonalize_fn)
 
     run_training_loop(
         model=model,

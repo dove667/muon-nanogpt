@@ -39,9 +39,8 @@ def build_param_table(model, orth_mode: str) -> dict[str, dict]:
     return table
 
 
-def build_optimizer(model, *, orth_mode: str, polar_express) -> NorMuonAndAdam:
+def build_optimizer(model, *, orth_mode: str, orthogonalize_fn) -> NorMuonAndAdam:
     param_table = build_param_table(model, orth_mode)
-    work_order = list(param_table)
 
     adam_cfg = OPTIMIZER.adam_defaults
     muon_cfg = OPTIMIZER.muon_defaults
@@ -57,10 +56,9 @@ def build_optimizer(model, *, orth_mode: str, polar_express) -> NorMuonAndAdam:
         model.named_parameters(),
         param_table=param_table,
         scatter_order=list(param_table),
-        work_order=work_order,
         adam_defaults=adam_defaults,
         normuon_defaults=normuon_defaults,
-        orthogonalize_fn=polar_express,
+        orthogonalize_fn=orthogonalize_fn,
     )
 
 

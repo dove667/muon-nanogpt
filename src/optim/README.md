@@ -13,8 +13,7 @@ Muon / Adam 优化器实现、正交化调度与相关数学工具。
 - `__init__.py`：统一导出优化器构建与正交化工具函数。
 - `manager.py`：构建参数表、创建优化器、更新学习率并驱动每步 `step_optimizer`。
 - `normuon.py`：`NorMuonAndAdam` 主实现，包含 Adam 更新、Muon 更新、动量状态和方差缩放。
-- `orth.py`：系数调度、运行记录和正交化相关元信息。
-- `polar.py`：`make_polar_express`，实现 Muon 中对 `g` 做五次多项式迭代的核心逻辑。
+- `orth.py`：系数调度、运行记录和正交化核心逻辑（Newton-Schulz / polar 表达式迭代）。
 
 ## 当前谱分析相关约定
 
