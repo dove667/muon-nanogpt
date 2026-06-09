@@ -43,6 +43,15 @@
 - 谱分析可视化功能并入 `plot_curves.py`，通过 `--spectral` 数据自动触发，不再使用独立的 `plot_spectral.py`
 - 全部 train / benchmark / spectral 实验完成，当前文档结论已同步到 `docs/report.md`
 - 新增 `docs/final_report/final_report.tex` 与 `docs/final_report/references.bib`，按课程 PDF 的四段结构起草英文 final report，并直接引用 `results/` 中的训练、benchmark 与谱分析图表
+- 根据人工反馈继续精修 `docs/final_report/final_report.tex`：补强 Muon 数学动机与 Newton-Schulz 奇异值视角，重写 Technical Approach 为实验设计逻辑，并显著扩写 Main Results 的训练/几何/成本分析
+- 重组 final report 的 Main Results：改为结论驱动的段落组织，每段段首明确主结论，合并同类发现并删除冗余解释
+- 补回 final report 的图像组织：两张时间序列折线图改回并排双图，并恢复正文对 `curve-panels` 与 `spectral-panels` 的显式引用
+- 调整 final report 表格布局：将训练结果的两张表与谱分析的两张表分别合并为并排表格组，以改善单列表格的页面占用
+- 继续压缩 Main Results：合并重复性质的训练与谱分析结论，并删除非结果性的图表提示句
+- 拆分谱分析中的复合结论段：将“早出现且 attention 更敏感”改为两个单一结论段
+- 补强谱分析末尾两段的解释力度，在保持“一段一个发现”的前提下增加结果含义说明
+- 重写 final report 的 Conclusion：第一段改为研究问题导向的总结，第二段合并 limitation 与 future directions，取消列表格式
+- 重写 Main Results 段首加粗结论句，改为更短、更具体的研究结论表述，去掉抽象的提示性写法
 
 ## 固定训练栈
 
