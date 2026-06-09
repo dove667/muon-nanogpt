@@ -32,21 +32,19 @@
 
 \section{Problem Setup}
 \textbf{Problem statement.}
-Muon is a recently proposed optimizer that updates matrix parameters by orthogonalizing a momentum-like update direction through a short Newton--Schulz (NS) iteration \citep{jordan2024muon,moddednanogpt2024}. Recent theory has also started to analyze the convergence properties of Muon-style NS updates \citep{kim2026convergence}. In practice, the iteration is controlled by quintic coefficients, so schedule design becomes a spectral design problem rather than a minor implementation detail. This project asks:
-\emph{under a fixed transformer pretraining stack, how do different NS coefficient schedules change the spectral geometry of Muon updates, and how does this spectral geometric change affect convergence quality and training cost?}
+Muon is a recently proposed optimizer that updates matrix parameters by orthogonalizing a momentum-like update direction through a short Newton--Schulz (NS) iteration \citep{jordan2024muon,moddednanogpt2024}. Recent theory has also started to analyze the convergence properties of Muon-style NS updates \citep{kim2026convergence}. In practice, the iteration is controlled by quintic coefficients, so schedule design is not merely an implementation detail. This project asks:
+\emph{under a fixed transformer pretraining stack, how do different NS coefficient schedules change the spectral geometry of Muon updates, and how do these geometric changes affect validation loss and training cost?}
 
 \textbf{Mathematical formulation.}
-To understand Muon, it is helpful to start from the limitation of AdamW. For a weight matrix $W\in\mathbb{R}^{m\times n}$, AdamW treats the gradient elementwise: each entry is scaled by a diagonal preconditioner built from coordinatewise first and second moments. This is effective, but it ignores the fact that $W$ is a matrix with coupled row and column geometry. In particular, an update can have very uneven singular values, meaning that some directions are stretched much more strongly than others. Muon is motivated by the idea that for hidden-layer matrix parameters, a better update should behave more like a \emph{semi-orthogonal} transformation, which acts more isotropically on the short side of the matrix and avoids concentrating the update into a few dominant singular directions.
-
-For a rectangular matrix $X$, the target geometry is not full orthogonality in the square sense, but semi-orthogonality:
+AdamW treats each entry of a weight matrix with coordinatewise first- and second-moment statistics. Muon instead treats a hidden-layer weight as a matrix and attempts to make the update direction more semi-orthogonal. For a rectangular matrix $X$, the target geometry is
 \begin{equation}
     X^\top X \approx I_n \quad \text{if } m\ge n,
     \qquad
     X X^\top \approx I_m \quad \text{if } m<n.
 \end{equation}
-Equivalently, if $X=U\Sigma V^\top$ is an SVD, then the ideal semi-orthogonal factor is the polar factor $UV^\top$, whose nonzero singular values are all equal to $1$. Muon therefore does not simply use the raw momentum update as the descent direction; it first transforms that matrix into a direction whose singular values are closer to $1$.
+Equivalently, if $X=U\Sigma V^\top$, the ideal polar factor $UV^\top$ has all nonzero singular values equal to one. Muon approximates this polar factor by repeatedly applying a quintic matrix polynomial.
 
-At a high level, the optimizer can be summarized as in Algorithm~\ref{alg:muon-high-level}. The key distinction from AdamW is that Muon does not directly use a coordinatewise-scaled matrix gradient as its update. Instead, it forms a matrix-valued search direction and then explicitly pushes that direction toward semi-orthogonality before applying the learning-rate step.
+The high-level Muon update for a matrix parameter is summarized in Algorithm~\ref{alg:muon-high-level}. Non-matrix parameters such as embeddings and normalization parameters are still updated by Adam-style rules, so the defining difference from AdamW lies in the matrix update path.
 
 \begin{algorithm}[t]
 \caption{High-level Muon update for a matrix parameter}
@@ -57,74 +55,53 @@ At a high level, the optimizer can be summarized as in Algorithm~\ref{alg:muon-h
 \For{$t=1,2,\dots$}
     \State Compute matrix gradient $G_t=\nabla_W \mathcal{L}_t(W_{t-1})$
     \State Update momentum direction $M_t \leftarrow \mu M_{t-1} + G_t$
-    \State Obtain a semi-orthogonalized direction $O_t$ by applying Newton--Schulz iteration on $M_t$
+    \State Obtain a semi-orthogonalized direction $O_t$ by applying NS iteration to $M_t$
     \State Update parameters: $W_t \leftarrow W_{t-1} - \eta_t O_t$
 \EndFor
 \end{algorithmic}
 \end{algorithm}
 
-Non-matrix parameters such as embeddings and normalization parameters are still updated by Adam-style rules. Thus, the defining difference from AdamW is specifically how matrix-valued directions are treated.
-
-Why can NS iterations produce a semi-orthogonal matrix? The reason is that they act on singular values. After a normalization step, Muon repeatedly applies a quintic matrix polynomial. If $X_k$ is the matrix after the $k$-th NS iteration, then
+The NS step acts on singular values. If $X_k$ is the matrix after the $k$-th iteration, then
 \begin{equation}
     X_{k+1} = a_k X_k + b_k X_k X_k^\top X_k + c_k (X_k X_k^\top)^2 X_k,
 \end{equation}
-or the aspect-ratio-swapped equivalent when the matrix is tall. Because this map is equivariant to the SVD, it leaves singular vectors unchanged and transforms only the singular values. At the scalar level,
+or the aspect-ratio-swapped equivalent for tall matrices. At the singular-value level,
 \begin{equation}
-    \sigma_{k+1} = p_k(\sigma_k), \qquad
-    p_k(\sigma)=a_k \sigma + b_k \sigma^3 + c_k \sigma^5.
+    \sigma_{k+1}=p_k(\sigma_k),\qquad
+    p_k(\sigma)=a_k\sigma+b_k\sigma^3+c_k\sigma^5.
 \end{equation}
-Therefore, a coefficient schedule $\{(a_k,b_k,c_k)\}_{k=1}^5$ defines a composed spectral map on singular values. If the composed map pushes the relevant singular-value range toward $1$, then the resulting matrix becomes closer to the polar factor and hence closer to semi-orthogonality. This is the mathematical core of Muon: orthogonalization is implemented indirectly by shaping the singular-value dynamics with a short polynomial iteration.
+Thus a schedule $\{(a_k,b_k,c_k)\}_{k=1}^{T}$ defines a composed spectral map $p_T$ that controls how aggressively singular values are moved toward one. In this sense, Muon is a family of optimizers parameterized by spectral maps.
 
-This perspective also explains why coefficient choice matters. Different coefficients create different scalar maps $p_k$: some are conservative and stable, some are more aggressive and rapidly amplify small singular directions, and some are designed adaptively from a presumed lower bound on the spectrum \citep{amsel2025polar}. In other words, Muon is not just one optimizer; it is a family of optimizers parameterized by spectral maps.
-
-In our project, We compare four muon coefficient schedule methods along with AdamW as a baseline in the transformer pretraining setting:
+We study AdamW and four Muon schedule families:
 \begin{itemize}
-    \item \textbf{AdamW}: no NS orthogonalization on matrix parameters.
-    \item \textbf{Vanilla}: five stable steps $(2.0,-1.5,0.5)$.
-    \item \textbf{Fast}: five aggressive steps $(3.4445,-4.7750,2.0315)$.
-    \item \textbf{Manual}: three fast steps followed by two stable steps.
-    \item \textbf{Polar Express}: five adaptive quintic steps from \citet{amsel2025polar}.
+    \item \textbf{stable5}: five stable NS steps $(2.0,-1.5,0.5)$;
+    \item \textbf{fast5}: five aggressive Muon steps $(3.4445,-4.7750,2.0315)$;
+    \item \textbf{manual}: a fast-to-stable schedule, e.g. \texttt{manual\_T5\_f3\_s2} means three fast steps followed by two stable steps;
+    \item \textbf{Polar Express}: quintic coefficients generated from matrix-sign theory and a lower-bound assumption \citep{amsel2025polar}.
 \end{itemize}
 
 \section{Technical Approach}
-\textbf{Experimental logic.}
-The central goal of the experiment is to isolate the effect of the NS coefficient schedule itself. For that reason, we use a strict controlled design in which the architecture, data source, token budget, learning-rate schedule, batch structure, and all Muon hyperparameters other than the orthogonalization schedule are held fixed across runs. Under this design, observed differences can be interpreted as consequences of spectral-map design rather than of unrelated tuning changes.
+\textbf{Controlled experimental design.}
+The central goal is to isolate the effect of the coefficient schedule. We therefore fix the model, data source, token budget, batch structure, learning-rate schedule, and all non-schedule optimizer hyperparameters. AdamW is included as an external baseline because it does not use NS orthogonalization. Within the Muon family, the primary treatment variable is the schedule-defined spectral map.
 
-The treatment groups are the four Muon schedules introduced above: Vanilla, Fast, Manual, and Polar Express. These four schedules span the main design space of interest:
-\begin{itemize}
-    \item a stable classical NS schedule,
-    \item a fully aggressive fast schedule,
-    \item a hybrid schedule that is fast early and stable late,
-    \item an adaptive schedule derived from matrix-sign theory.
-\end{itemize}
-AdamW is included as an external baseline because it provides a useful reference point for what happens when matrix parameters are \emph{not} orthogonalized at all. This makes it possible to separate two questions: how Muon-style semi-orthogonal updates differ from a standard non-orthogonalized baseline, and how different NS schedules alter pretraining behavior and spectral dynamics once Muon is adopted.
+All experiments are run on one RTX 4090 GPU in BF16 precision using FineWeb-10B tokenized shards \citep{penedo2024fineweb}. The model is an 11-layer pre-norm Transformer with model dimension 768, 6 attention heads, head dimension 128, MLP ratio 4, and sequence length 2048. The training budget is fixed at 100M tokens, with 131{,}072 tokens per optimizer step, 16 gradient-accumulation steps, 2\% warmup, and cosine decay to 20\% of the peak learning rate.
 
-\textbf{Evaluation dimensions.}
-The study evaluates each method along three dimensions. First, we measure \emph{optimization quality} through validation-loss trajectories, final validation loss, and area under the validation-loss curve. Second, we measure \emph{computational cost} through end-to-end wall-clock time, because a schedule that improves geometry but is too expensive would be less practically useful. Third, we measure \emph{update geometry} directly by analyzing the matrices $B_t$, $g_{\mathrm{pre},t}$, and $g_{\mathrm{post},t}$ during training. This geometric analysis is essential: without it, any difference in final loss would remain a black-box empirical observation rather than a mathematically interpretable effect of the NS map.
-
-\textbf{Experimental setup.}
-All experiments are run on one RTX 4090 GPU in BF16 precision using FineWeb-10B tokenized shards \citep{penedo2024fineweb}. The model is a standard 11-layer pre-norm Transformer with model dimension 768, 6 attention heads, head dimension 128, MLP ratio 4, and sequence length 2048. The total training budget is fixed at 100M tokens, with 131{,}072 tokens per optimizer step, 16 gradient-accumulation steps, 2\% warmup, and cosine decay to 20\% of the peak learning rate.
-
-The optimizer settings are chosen to match a realistic small-transformer pretraining regime:
+The optimizer settings are fixed as follows:
 \begin{itemize}
     \item AdamW baseline: learning rate $6\times 10^{-4}$, $(\beta_1,\beta_2)=(0.9,0.95)$, weight decay $0.1$.
-    \item Muon family: matrix learning rate $0.023$, momentum $0.95$, $\beta_2=0.9$, weight decay $1.2$, and $T=5$ NS steps.
+    \item Muon family: matrix learning rate $0.023$, momentum $0.95$, $\beta_2=0.9$, weight decay $1.2$.
 \end{itemize}
-These values lie in the empirically established ``sweet spot'' commonly used in modern small-transformer pretraining practice and in public Muon baselines~\cite{moddednanogpt2024}, so they should be viewed as reasonable strong-default settings rather than arbitrary picks. At the same time, we do not perform a large hyperparameter sweep around them, because exhaustive tuning is not the scientific focus of this project. 
 
-\textbf{Muon variant used in this project.}
-The project does not use the simplest textbook momentum form shown in Algorithm~\ref{alg:muon-high-level}. The actual matrix update path is a \emph{Nesterov-style} lookahead variant together with second-moment rescaling, so more precisely it is a normalized Muon (NorMuon) implementation. Let $G_t$ denote the matrix gradient at step $t$, and let $B_t$ be the momentum buffer. The update path is
+\textbf{Implemented Muon variant and diagnostics.}
+The implementation is a normalized Muon variant with a Nesterov-style lookahead path. Let $G_t$ denote the matrix gradient and $B_t$ the momentum buffer:
 \begin{align}
-    B_t &= m B_{t-1} + (1-m) G_t, \\
-    g_{\mathrm{pre},t} &= m B_t + (1-m) G_t, \\
+    B_t &= m B_{t-1} + (1-m)G_t,\\
+    g_{\mathrm{pre},t} &= mB_t + (1-m)G_t,\\
     g_{\mathrm{post},t} &= \mathcal{P}(g_{\mathrm{pre},t}),
 \end{align}
-where $\mathcal{P}$ is the schedule-defined NS orthogonalization map. The use of $g_{\mathrm{pre},t}$ means the optimizer does not orthogonalize the raw buffer itself, but a Nesterov-style lookahead combination that effectively ``looks one step ahead'' along the momentum direction.
+where $\mathcal{P}$ is the schedule-defined NS map. The measured geometry is therefore the geometry of the real implemented update, not an idealized textbook Muon direction.
 
-After orthogonalization, the implementation further applies a second-moment normalization on the matrix update magnitude before weight decay and the learning-rate step. In that sense, our project studies not only coefficient schedules inside Muon, but coefficient schedules inside the specific \emph{normalized} Muon variant actually used by this training stack. This detail is important for interpreting the results, because the measured update geometry is the geometry of the real implemented search direction rather than of an idealized Muon formula.
-
-For the spectral geometric study, every 10M training tokens we sample representative update matrices and record singular-value statistics together with a short-side semi-orthogonality error:
+The study uses three run modes. \texttt{train} records validation-loss trajectories, \texttt{benchmark} measures end-to-end wall-clock time with synchronization, and \texttt{spectral} samples real update matrices for SVD diagnostics. For a sampled matrix $X$, we use the short-side semi-orthogonality error
 \begin{equation}
     \varepsilon(X)=
     \begin{cases}
@@ -132,172 +109,131 @@ For the spectral geometric study, every 10M training tokens we sample representa
         \lVert X X^\top-I\rVert_F, & X \text{ wide}.
     \end{cases}
 \end{equation}
-This metric is applied to \texttt{buffer\_post}, \texttt{g\_pre}, and \texttt{g\_post}. It allows us to distinguish between geometry inherited from the training trajectory before orthogonalization and geometry created directly by the NS map after orthogonalization.
+This metric is recorded for \texttt{buffer\_post}, \texttt{g\_pre}, and \texttt{g\_post}. We also compute validation-loss AUC over tokens and over wall-clock time. These AUCs summarize the average validation loss along the whole curve, so they are more stable than a local loss-decrease slope over an arbitrary interval.
 
 \section{Main Results}
-\subsection{Training Results}
-\textbf{Muon consistently improves pretraining quality over the AdamW baseline under the same token budget.} Table~\ref{tab:train} shows that every Muon variant reaches lower final validation loss and lower validation-loss AUC than AdamW within 100M training tokens. This is the most basic empirical result of the project: introducing semi-orthogonalized matrix updates changes optimization behavior enough to produce a substantial quality gain in this controlled transformer-pretraining setting.
-
-\textbf{Fast and Polar Express give the strongest training results among the Muon schedules.} Fast attains the lowest final validation loss in this run, while Polar Express remains numerically extremely close and gives the lowest AUC; Manual stays between these two settings and Vanilla. The left panel of Figure~\ref{fig:curve-panels} shows the same structure at the trajectory level, and Table~\ref{tab:threshold} shows that this advantage is not limited to the final checkpoint: Fast and Polar Express also reach low validation-loss thresholds with fewer training tokens. The gap between these two schedules remains small and should be interpreted cautiously at the scale of the present experiment.
-
-\begin{table}[t]
-\centering
-
-\begin{subtable}[t]{0.49\linewidth}
-    \centering
-    \caption{Training metrics under the fixed 100M-token budget.}
-    \label{tab:train}
-    \small
-    \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lccc@{}}
-    \toprule
-    Method & Final loss & Best loss & AUC \\
-    \midrule
-    AdamW & 5.5183 & 5.5182 & 6.1312 \\
-    Vanilla & 4.5323 & 4.5323 & 5.3225 \\
-    Manual & 4.3147 & 4.3147 & 5.0291 \\
-    Fast & \textbf{4.2807} & \textbf{4.2807} & 4.9354 \\
-    Polar Express & 4.2896 & 4.2896 & \textbf{4.9342} \\
-    \bottomrule
-    \end{tabular*}
-\end{subtable}\hfill
-\begin{subtable}[t]{0.49\linewidth}
-    \centering
-    \caption{Training tokens needed to reach validation-loss thresholds.}
-    \label{tab:threshold}
-    \small
-    \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lccc@{}}
-    \toprule
-    Method & $\le 7.0$ & $\le 6.0$ & $\le 5.5$ \\
-    \midrule
-    AdamW & 14.02M & 48.10M & N/A \\
-    Vanilla & 8.13M & 22.02M & 36.04M \\
-    Manual & 6.03M & 16.12M & 26.08M \\
-    Fast & 6.03M & 14.02M & 22.02M \\
-    Polar Express & 6.03M & 14.02M & 22.02M \\
-    \bottomrule
-    \end{tabular*}
-\end{subtable}
-
-\caption{Training-result summaries under the fixed 100M-token budget.}
-\label{tab:train-group}
-\end{table}
-
-\subsection{Benchmark Results}
-\textbf{The four Muon schedules have essentially the same wall-clock cost.} Table~\ref{tab:bench} shows that all four Muon schedules finish in about 1132--1134 seconds. This is an important negative result: once the number of NS steps and the surrounding optimizer path are fixed, coefficient design affects training behavior far more than it affects throughput.
+\subsection{Fixed-T Coefficient Schedules}
+\textbf{The fixed five-step comparison shows that coefficient choice is already enough to change training behavior.}
+Table~\ref{tab:t5} and Figure~\ref{fig:core} compare the core $T=5$ schedules. AdamW is clearly separated from all Muon variants. Within the Muon family, \texttt{stable5} is conservative and substantially worse, \texttt{manual\_T5\_f3\_s2} lies in the middle, and \texttt{fast5} together with the better Polar Express schedules forms the leading group.
 
 \begin{table}[t]
 \centering
-\caption{Benchmark wall-clock and peak memory.}
-\label{tab:bench}
+\caption{Core $T=5$ training metrics under the fixed 100M-token budget.}
+\label{tab:t5}
 \small
-\begin{tabular}{lcc}
+\begin{tabular}{llcc}
 \toprule
-Method & Wall-clock (s) & Peak memory (MiB) \\
+Method & Schedule & Final loss & AUC over tokens \\
 \midrule
-AdamW & 1063.99 & 8380 \\
-Vanilla & 1133.54 & 8074 \\
-Manual & 1132.34 & 8074 \\
-Fast & 1132.71 & 8074 \\
-Polar Express & 1132.58 & 8074 \\
+AdamW & \texttt{adamw} & 5.3737 & 5.9677 \\
+Stable NS & \texttt{stable5} & 4.5273 & 5.3166 \\
+Manual & \texttt{manual\_T5\_f3\_s2} & 4.3176 & 5.0295 \\
+Fast Muon & \texttt{fast5} & \textbf{4.2828} & 4.9340 \\
+Polar Express & \texttt{pe\_T5\_l3e-3} & 4.2873 & 4.9462 \\
+Polar Express & \texttt{pe\_T5\_l1e-3} & 4.2902 & \textbf{4.9338} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{AdamW is faster mainly because it avoids Newton--Schulz orthogonalization.} In our implementation, both optimizers are written as explicit PyTorch tensor operations, so the comparison is not confounded by one optimizer using a privileged fused kernel while the other does not. AdamW is about 6\% faster mainly because it avoids the additional Newton--Schulz and normalization path. Under the present setup, this extra compute is visible but modest relative to the improvement in validation loss.
-
-\textbf{Muon uses less peak memory than AdamW in this benchmark.} AdamW reaches a peak of 8380 MiB, whereas all four Muon schedules remain at 8074 MiB. The reason is structural: AdamW stores two full-size FP32 state tensors per matrix parameter, while normalized Muon stores one full-size FP32 momentum buffer and only a reduced second-moment buffer of shape $m\times 1$ or $1\times n$. This makes Muon more attractive for matrix-dominated pretraining workloads, and the advantage would be even larger for plain Muon without the reduced second-moment normalization state.
-
-\subsection{Spectral Geometry Results}
-\textbf{Better training performance is associated with smaller post-orthogonalization error.} Table~\ref{tab:spectral} aggregates the sampled semi-orthogonality errors and gives the following ordering on $\texttt{g\_post}$:
-\[
-\text{Polar Express} < \text{Fast} < \text{Manual} < \text{Vanilla},
-\]
-which closely matches the ordering seen in validation loss. Table~\ref{tab:spectral} and the left panel of Figure~\ref{fig:spectral-panels} also show why this relationship is meaningful: Newton--Schulz orthogonalization reduces the error from roughly 3--5 before orthogonalization to roughly 0.5--0.9 after orthogonalization. At the same time, the schedules are already clearly separated at $\texttt{g\_pre}$. This means schedule choice influences both the long-run trajectory that generates pre-orthogonalized updates and the final NS mapping that reshapes them.
-
 \begin{figure}[t]
 \centering
-\begin{subfigure}[t]{0.49\linewidth}
-    \centering
-    \includegraphics[width=\linewidth]{figures/val_loss_vs_tokens.png}
-    \caption{Validation loss versus training tokens.}
-    \label{fig:val-loss}
-\end{subfigure}\hfill
-\begin{subfigure}[t]{0.49\linewidth}
-    \centering
-    \includegraphics[width=\linewidth]{figures/g_post_semi_orth_error_vs_tokens.png}
-    \caption{$\texttt{g\_post}$ semi-orthogonality over training.}
-    \label{fig:gpost-time}
-\end{subfigure}
-\caption{Trajectory-level evidence from optimization and update geometry. The left panel shows tokenwise validation loss, and the right panel shows the corresponding evolution of post-orthogonalization semi-orthogonality error.}
-\label{fig:curve-panels}
+\includegraphics[width=0.82\linewidth]{figures/core_t5_val_loss.png}
+\caption{Core $T=5$ validation-loss curves. All curves use the same model, data, token budget, batch setting, and learning-rate schedule. Lower curves indicate better token efficiency.}
+\label{fig:core}
 \end{figure}
 
-\textbf{The geometry gap appears early and remains stable throughout training.} The right panel of Figure~\ref{fig:curve-panels} shows that the ordering of $\texttt{g\_post}$ error appears from the first spectral sample and remains stable over time, so the effect is not a noisy endpoint artifact. This matters because it shows that the spectral separation is a persistent property of the optimization process rather than a one-time fluctuation near the end of training. In other words, the schedule-dependent geometric differences are established early enough to plausibly influence a large part of the learning trajectory.
+The result also explains why the original fast Muon coefficients should not be treated as arbitrary tuning constants. The stable NS map is mathematically conservative, but its conservative singular-value amplification is not ideal for early pretraining. The fast coefficients appear to provide a useful amount of aggressive amplification while remaining stable enough for this model and token budget.
 
-\textbf{Schedule sensitivity is larger in attention layers than in MLP layers.} Table~\ref{tab:module} and the right panel of Figure~\ref{fig:spectral-panels} show that the separation among schedules is larger in attention blocks. For example, Polar Express and Fast are more clearly separated from Vanilla on attention matrices than on MLP matrices. This suggests that attention updates are a particularly important locus where better singular-value control translates into better optimization behavior in the present model.
+\subsection{Follow-up Checks: Seeds, Depth, and Lower Bounds}
+\textbf{The multi-seed check makes the main training conclusion conservative rather than stronger.}
+For three representative schedules, we repeated training with seeds 0, 1, and 2. The mean results in Table~\ref{tab:multiseed} show that \texttt{fast5} remains the best practical baseline, but the gaps are small. The standard deviations are of the same order as the differences among the top schedules, so the correct interpretation is not that one schedule decisively dominates, but that more complex geometry does not reliably improve final validation loss in the current 100M-token regime.
 
 \begin{table}[t]
 \centering
+\caption{Multi-seed final validation loss for representative schedules.}
+\label{tab:multiseed}
+\small
+\begin{tabular}{lcc}
+\toprule
+Schedule & Mean final loss & Std. over seeds \\
+\midrule
+\texttt{fast5} & \textbf{4.2892} & 0.0056 \\
+\texttt{manual\_T9\_f4\_s5} & 4.2962 & 0.0038 \\
+\texttt{pe\_T9\_l3e-5} & 4.2998 & 0.0044 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\begin{subtable}[t]{0.49\linewidth}
-    \centering
-    \caption{Mean semi-orthogonality errors from spectral runs.}
-    \label{tab:spectral}
-    \small
-    \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lccc@{}}
-    \toprule
-    Method & \texttt{buffer\_post} & \texttt{g\_pre} & \texttt{g\_post} \\
-    \midrule
-    Vanilla & 5.0407 & 5.1280 & 0.9229 \\
-    Manual & 3.2941 & 3.3387 & 0.7262 \\
-    Fast & 3.4460 & 3.4971 & 0.6598 \\
-    Polar Express & 3.3158 & 3.3560 & \textbf{0.5561} \\
-    \bottomrule
-    \end{tabular*}
-\end{subtable}\hfill
-\begin{subtable}[t]{0.49\linewidth}
-    \centering
-    \caption{Mean $\texttt{g\_post}$ semi-orthogonality error by module type.}
-    \label{tab:module}
-    \small
-    \begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcc@{}}
-    \toprule
-    Method & Attention & MLP \\
-    \midrule
-    Vanilla & 0.9195 & 0.9263 \\
-    Manual & 0.6880 & 0.7644 \\
-    Fast & 0.5484 & 0.7713 \\
-    Polar Express & 0.3994 & 0.7129 \\
-    \bottomrule
-    \end{tabular*}
-\end{subtable}
+\textbf{Increasing manual depth helps at first but is not monotone.}
+The manual family improves sharply from \texttt{manual\_T5\_f3\_s2} to the $T=7,8,9,10$ range. For example, final loss drops from 4.3176 at $T=5$ to 4.2873 at \texttt{manual\_T7\_f4\_s3}. After that, the results lie in a narrow band: \texttt{manual\_T8\_f5\_s3}, \texttt{manual\_T9\_f3\_s6}, \texttt{manual\_T9\_f4\_s5}, and \texttt{manual\_T10\_f5\_s5} have final losses between 4.2887 and 4.2949. Thus, depth is useful as a way to approach the leading group, but more NS iterations are not automatically better.
 
-\caption{Spectral summaries for overall and module-specific geometry.}
-\label{tab:spectral-group}
+\textbf{Polar Express lower bound is a real algorithmic parameter.}
+At fixed $T=5$, changing the lower bound changes both final loss and AUC: \texttt{pe\_T5\_l3e-3} reaches 4.2873, \texttt{pe\_T5\_l1e-3} reaches 4.2902, \texttt{pe\_T5\_l3e-4} reaches 4.2998, and \texttt{pe\_T5\_l3e-5} reaches 4.3125. This is not merely a cosmetic hyperparameter; it changes the singular-value interval assumed by the Polar Express construction and therefore changes the composed spectral map. Increasing PE depth to $T=9$ or $T=10$ improves the low-bound setting, but it still does not give a robust loss advantage over \texttt{fast5}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\linewidth]{figures/multi_seed_final_loss.png}
+\caption{Multi-seed final validation loss over seeds 0/1/2. The leading schedules are close, so the correct conclusion is that \texttt{fast5} is the most reliable practical baseline in this setting rather than a decisive universal winner.}
+\label{fig:followup}
+\end{figure}
+
+\subsection{Cost and Spectral Geometry}
+\textbf{Coefficient changes at fixed depth have negligible wall-clock effect.}
+At $T=5$, the Muon schedules all finish in about 1095--1099 seconds, while AdamW finishes in 1039.73 seconds. The AdamW baseline is faster because it does not execute the NS orthogonalization path. In contrast, changing scalar coefficients inside a fixed five-step Muon schedule barely changes runtime. Deeper $T=9$ schedules are naturally more expensive: \texttt{manual\_T9\_f4\_s5} takes 1123.53 seconds and \texttt{pe\_T9\_l3e-5} takes 1119.42 seconds. This motivates reporting both token efficiency and wall-clock AUC instead of ranking schedules only by final loss.
+
+\textbf{Geometry changes are much larger than loss changes.}
+The strongest evidence for the mathematical content of the project comes from spectral diagnostics. Table~\ref{tab:spectral} reports the post-orthogonalization error for representative schedules. Deeper manual and PE schedules make \texttt{g\_post} much closer to semi-orthogonal than \texttt{fast5}, especially in attention matrices. However, these geometric improvements do not translate into lower multi-seed validation loss. This is the central tension in the results: better semi-orthogonality is real and measurable, but its relationship to language-model validation loss is not monotone at this training scale.
+
+\begin{table}[t]
+\centering
+\caption{Representative spectral diagnostics. Lower values mean the update is closer to semi-orthogonal.}
+\label{tab:spectral}
+\small
+\begin{tabular}{lccc}
+\toprule
+Schedule & Overall \texttt{g\_post} & Attention & MLP \\
+\midrule
+\texttt{stable5} & 0.9006 & -- & -- \\
+\texttt{fast5} & 0.6444 & 0.5146 & 0.7743 \\
+\texttt{manual\_T5\_f3\_s2} & 0.6866 & -- & -- \\
+\texttt{manual\_T9\_f4\_s5} & 0.4431 & 0.1776 & 0.7086 \\
+\texttt{pe\_T5\_l1e-3} & 0.5452 & -- & -- \\
+\texttt{pe\_T9\_l3e-5} & \textbf{0.3781} & \textbf{0.0481} & \textbf{0.7081} \\
+\bottomrule
+\end{tabular}
 \end{table}
 
 \begin{figure}[t]
 \centering
-\begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \includegraphics[width=\linewidth]{figures/object_semi_orth_error.png}
-    \caption{Before vs.\ after orthogonalization.}
-\end{subfigure}\hfill
-\begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \includegraphics[width=\linewidth]{figures/g_post_semi_orth_error_attn_vs_mlp.png}
-    \caption{Attention vs.\ MLP geometry.}
-\end{subfigure}
-\caption{Additional spectral evidence. Left: NS orthogonalization sharply reduces semi-orthogonality error. Right: attention matrices show stronger schedule sensitivity than MLP matrices.}
-\label{fig:spectral-panels}
+\includegraphics[width=0.86\linewidth]{figures/spectral_summary.png}
+\caption{Spectral diagnostics. Left: \texttt{buffer\_post}, \texttt{g\_pre}, and \texttt{g\_post} errors show how much the NS map changes the update. Right: attention matrices are more schedule-sensitive than MLP matrices.}
+\label{fig:spectral}
 \end{figure}
+
+\section{Singular-Value Map Interpretation}
+The empirical results are easier to interpret through the scalar map $p_T(\sigma)$. A useful diagnostic is the gain
+\begin{equation}
+    \mathrm{gain}(\sigma)=\frac{p_T(\sigma)}{\sigma},
+\end{equation}
+which measures how strongly a small singular value is amplified by the full schedule. At $\sigma=10^{-5}$, the gain values are approximately 32 for \texttt{stable5}, 485 for \texttt{fast5}, 4502 for \texttt{manual\_T9\_f4\_s5}, and 71309 for \texttt{pe\_T9\_l3e-5}. This ordering explains the spectral results: more aggressive schedules can reduce \texttt{g\_post} error much more strongly.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.82\linewidth]{figures/composed_maps.png}
+\caption{Composed singular-value maps. Stable schedules are smooth and conservative, while deeper manual and PE schedules amplify small singular values more aggressively. The stronger maps improve geometric semi-orthogonality but do not guarantee lower validation loss.}
+\label{fig:maps}
+\end{figure}
+
+The same interpretation also explains why the final training conclusion must be modest. A schedule that aggressively pushes singular values toward one may create a cleaner semi-orthogonal update, but pretraining loss depends on the interaction among update direction, momentum trajectory, stochastic gradients, and model architecture. In our results, attention projections show the largest geometric response to stronger schedules, while MLP matrices respond less. This suggests that schedule design should be understood as a structured way of changing optimization geometry, not as a one-dimensional knob where ``more orthogonal'' always means ``better loss.''
 
 \FloatBarrier
 
 \section{Conclusion}
-This project asked how different Newton--Schulz coefficient schedules change the spectral geometry of Muon updates, and how those geometric changes relate to transformer pretraining behavior under a fixed experimental stack. The main conclusion is that the schedule matters because it changes the geometry of the actual matrix update, not merely because it changes an implementation detail inside the optimizer. Across the Muon variants, schedules that produce smaller post-orthogonalization error also produce better training outcomes: Fast and Polar Express give the strongest pretraining results, Polar Express gives the smallest $\texttt{g\_post}$ semi-orthogonality error, and all Muon schedules outperform the AdamW baseline at the same token budget. At the same time, the comparison clarifies the practical tradeoff. Within the Muon family, different schedules have essentially identical wall-clock cost, so the main effect of schedule design is on optimization trajectory rather than throughput; relative to AdamW, Muon pays a modest runtime overhead for Newton--Schulz orthogonalization but gains both better validation loss and lower peak memory in this benchmark.
+This project studied Muon as a family of Newton--Schulz spectral transformations rather than as a single optimizer. The controlled $T=5$ comparison shows that coefficient sequences matter: \texttt{stable5} is too conservative, \texttt{manual\_T5\_f3\_s2} is intermediate, and \texttt{fast5} together with well-chosen Polar Express schedules forms the leading group. The multi-seed follow-up makes the strongest practical statement clear: in the current 100M-token setting, \texttt{fast5} is the most reliable baseline, while deeper manual and PE schedules do not robustly lower final validation loss.
 
-These conclusions should be interpreted as results for one controlled pretraining regime rather than as universal claims about Muon in all settings. The study uses a single seed, one model scale, one token budget, and one data pipeline, so it does not yet measure how robust the observed schedule ordering is across random initialization, scale, or data regime. The spectral analysis is also sampled rather than exhaustive, and AdamW serves here as a fixed external baseline rather than as a fully re-tuned competitor. The most immediate next step is therefore to test whether the small gap between Fast and Polar Express remains consistent across multiple seeds and larger training runs. A second direction is to extend the mathematical analysis of the composed quintic map so that empirical phenomena observed here, especially the stronger schedule sensitivity in attention layers, can be related more directly to contraction behavior, spectral lower-bound assumptions, and the approximation quality of the polar factor. More broadly, the results suggest that Newton--Schulz schedule design is itself a meaningful optimization-geometry problem, rather than a secondary hyperparameter choice inside Muon.
+At the same time, the spectral diagnostics show that the more complex schedules are not meaningless. They substantially reduce post-orthogonalization error, especially in attention matrices, and their behavior can be explained by the composed singular-value map $p_T(\sigma)$. The main scientific conclusion is therefore not that a new schedule simply wins the benchmark. Rather, different NS schedules create controlled changes in update geometry, and those changes only partially translate into validation-loss improvements. This gives a more nuanced answer to the mathematical question behind Muon: semi-orthogonalization is useful, but the optimal amount and shape of spectral correction depend on the training dynamics.
+
+The study remains limited to one model scale, one 100M-token budget, and a small multi-seed set for representative schedules. Future work should repeat the strongest schedules at larger token budgets and analyze whether the attention-dominant spectral differences persist at scale. A complementary theoretical direction is to connect the fixed points, contraction regions, and lower-bound assumptions of the composed quintic map more directly to the measured training trajectories.
 
 \begingroup
 \footnotesize

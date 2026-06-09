@@ -61,22 +61,34 @@ def build_coeff_schedule(
     pe_lower_bound_raw: str,
     pe_cushion: float,
     pe_safety_factor: float,
+    ns_iterations: int,
+    pe_iterations: int | None = None,
 ) -> list[tuple[float, float, float]]:
+    if ns_iterations <= 0:
+        raise RuntimeError(f"ns_iterations must be positive, got {ns_iterations}")
+    if pe_iterations is None:
+        pe_iterations = ns_iterations
+    if pe_iterations <= 0:
+        raise RuntimeError(f"pe_iterations must be positive, got {pe_iterations}")
+
     if orth_mode == "adamw":
         coeffs = []
     elif orth_mode == "vanilla":
-        coeffs = [STABLE_COEFF] * 5
+        coeffs = [STABLE_COEFF] * ns_iterations
     elif orth_mode == "fast":
-        coeffs = [FAST_COEFF] * 5
+        coeffs = [FAST_COEFF] * ns_iterations
     elif orth_mode == "manual":
         if fast_steps < 0 or stable_steps < 0:
             raise RuntimeError("manual schedule counts must be non-negative")
-        if fast_steps + stable_steps != 5:
-            raise RuntimeError(f"FAST_STEPS + STABLE_STEPS must equal 5, got {fast_steps}+{stable_steps}!={5}")
+        if fast_steps + stable_steps != ns_iterations:
+            raise RuntimeError(
+                "FAST_STEPS + STABLE_STEPS must equal ns_iterations, "
+                f"got {fast_steps}+{stable_steps}!={ns_iterations}"
+            )
         coeffs = [FAST_COEFF] * fast_steps + [STABLE_COEFF] * stable_steps
     elif orth_mode == "polar_express":
         lower_bound = float(pe_lower_bound_raw)
-        coeffs = polar_express_coefficients(lower_bound, 5, pe_safety_factor, pe_cushion)
+        coeffs = polar_express_coefficients(lower_bound, pe_iterations, pe_safety_factor, pe_cushion)
     else:
         raise RuntimeError(f"unknown ORTH={orth_mode!r}; expected adamw, vanilla, fast, manual, or polar_express")
     return coeffs
@@ -88,13 +100,19 @@ def orth_schedule_name(
     *,
     fast_steps: int,
     stable_steps: int,
+    ns_iterations: int,
+    pe_iterations: int,
 ) -> str:
-    if orth_mode in {"adamw", "vanilla", "fast"}:
+    if orth_mode == "adamw":
         return orth_mode
+    if orth_mode == "vanilla":
+        return f"stable{ns_iterations}"
+    if orth_mode == "fast":
+        return f"fast{ns_iterations}"
     if orth_mode == "manual":
-        return f"manual_f{fast_steps}_s{stable_steps}"
+        return f"manual_T{ns_iterations}_f{fast_steps}_s{stable_steps}"
     if orth_mode == "polar_express":
-        return f"pe_l{pe_lower_bound_raw}"
+        return f"pe_T{pe_iterations}_l{pe_lower_bound_raw}"
     raise RuntimeError(f"unknown ORTH={orth_mode!r}; expected adamw, vanilla, fast, manual, or polar_express")
 
 
@@ -112,12 +130,16 @@ def orth_record(
     pe_cushion: float,
     pe_safety_factor: float,
     lr_mul: float,
+    ns_iterations: int,
+    pe_iterations: int,
 ) -> dict[str, object]:
     schedule_name = orth_schedule_name(
         orth_mode,
         pe_lower_bound_raw,
         fast_steps=fast_steps,
         stable_steps=stable_steps,
+        ns_iterations=ns_iterations,
+        pe_iterations=pe_iterations,
     )
     if orth_mode == "manual":
         record_fast_steps = fast_steps
