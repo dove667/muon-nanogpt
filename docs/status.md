@@ -52,6 +52,8 @@
 - 补强谱分析末尾两段的解释力度，在保持“一段一个发现”的前提下增加结果含义说明
 - 重写 final report 的 Conclusion：第一段改为研究问题导向的总结，第二段合并 limitation 与 future directions，取消列表格式
 - 重写 Main Results 段首加粗结论句，改为更短、更具体的研究结论表述，去掉抽象的提示性写法
+- 重构 final report 的 Training Results：将 `multiseed` 明确收束为稳定性检验，并把 `Manual depth` 与 `PE lower bound` 拆成独立 ablation 段落与两张新表，避免与核心 `T=5` 排名混写
+- 根据进一步反馈继续收紧 final report 的 Training Results：删除独立 `multiseed` 子表，把多 seed 稳定性直接并入 `T=5` 主表的 `Std.` 列，并让正文只围绕同一张主表展开
 
 ## 固定训练栈
 
