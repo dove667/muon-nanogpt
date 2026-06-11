@@ -54,6 +54,7 @@
 - 重写 Main Results 段首加粗结论句，改为更短、更具体的研究结论表述，去掉抽象的提示性写法
 - 重构 final report 的 Training Results：将 `multiseed` 明确收束为稳定性检验，并把 `Manual depth` 与 `PE lower bound` 拆成独立 ablation 段落与两张新表，避免与核心 `T=5` 排名混写
 - 根据进一步反馈继续收紧 final report 的 Training Results：删除独立 `multiseed` 子表，把多 seed 稳定性直接并入 `T=5` 主表的 `Std.` 列，并让正文只围绕同一张主表展开
+- 将 `docs/final_report/figures/` 下 6 张报告 PNG 全部转换为 PDF 版本，并把 `final_report.tex` 中现有插图引用切换为 PDF 资源，便于 LaTeX 编译与矢量化排版流程统一
 
 ## 固定训练栈
 

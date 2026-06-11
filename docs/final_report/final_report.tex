@@ -181,7 +181,7 @@ PE $(T=5)$ & 4.2902 & -- & \textbf{4.9338} \\
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.76\linewidth]{figures/core_t5_val_loss.png}
+\includegraphics[width=0.76\linewidth]{figures/core_t5_val_loss.pdf}
 \caption{Core $T=5$ validation-loss curves. The comparison isolates coefficient-sequence effects at fixed depth.}
 \label{fig:loss curve}
 \end{figure}
@@ -236,7 +236,9 @@ Within the PE family, the lower-bound parameter produces a non-monotonic tradeof
 
 
 \subsection{Spectral Geometry Results}
-\textbf{Newton--Schulz schedules create visibly different update geometries.} Table~\ref{tab:spectral} aggregates the sampled semi-orthogonality errors. The error drops sharply from \texttt{g\_pre} to \texttt{g\_post}, confirming that the NS map is doing the intended geometric work. At the same time, the schedules remain clearly separated after orthogonalization: deeper Manual and PE schedules produce smaller \texttt{g\_post} error than Fast, even though their final validation losses are higher.
+\textbf{Newton--Schulz schedules create visibly different update geometries.} Table~\ref{tab:spectral} aggregates the sampled semi-orthogonality errors across training. The first observation is that the error drops from \texttt{g\_pre} to \texttt{g\_post} for every schedule, confirming that the NS map is actively doing the intended geometric work at every step. However, the drop varies enormously: the conservative Stable coefficients reduce the error only to $0.9006$, which is substantially higher than more aggressive schedules.
+
+The second observation is that the schedules remain clearly separated after orthogonalization, and this separation is monotone in schedule aggressiveness. Stable ends at $0.9006$, Fast at $0.6444$, Manual $T=5$ at $0.6866$, Manual $T=9$ at $0.4431$, and PE $T=9$ at $0.3781$. This ordering is consistent with the polynomial amplification analysis in Section~\ref{sec:map}: deeper and more aggressive schedules push a larger fraction of the singular-value mass toward $1$, and the residual semi-orthogonality error reflects how far the actual update is from the ideal polar factor. Notably, deeper Manual and PE schedules achieve smaller \texttt{g\_post} error than Fast, even though their final validation losses are comparable or slightly higher---a finding that motivates the separate analysis in Section~\ref{sec:map}.
 
 \begin{table}[htbp]
 \centering
@@ -249,8 +251,8 @@ Within the PE family, the lower-bound parameter produces a non-monotonic tradeof
     \toprule
     Method & \texttt{buffer\_post} & \texttt{g\_pre} & \texttt{g\_post} \\
     \midrule
-    Vanilla & 5.0730 & 5.1962 & 0.9006 \\
-    Fast & 3.4080 & 3.4584 & 0.6444 \\
+    Stable $(T=5)$ & 5.0730 & 5.1962 & 0.9006 \\
+    Fast $(T=5)$ & 3.4080 & 3.4584 & 0.6444 \\
     Manual $(T=5)$ & 3.2840 & 3.3425 & 0.6866 \\
     Manual $(T=9)$ & 1.9864 & 2.0471 & 0.4431 \\
     PE $(T=9)$ & 2.1216 & 2.1781 & \textbf{0.3781} \\
@@ -266,7 +268,7 @@ Within the PE family, the lower-bound parameter produces a non-monotonic tradeof
     \toprule
     Method & Attention & MLP \\
     \midrule
-    Fast & 0.5146 & 0.7743 \\
+    Fast $(T=5)$ & 0.5146 & 0.7743 \\
     Manual $(T=9)$ & 0.1776 & 0.7086 \\
     PE $(T=9)$ & \textbf{0.0481} & \textbf{0.7081} \\
     \bottomrule
@@ -278,25 +280,41 @@ Within the PE family, the lower-bound parameter produces a non-monotonic tradeof
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.96\linewidth]{figures/spectral_summary.png}
+\includegraphics[width=0.96\linewidth]{figures/spectral_summary.pdf}
 \caption{Spectral diagnostics from sampled update matrices. Left: error before and after the NS map. Right: module-level \texttt{g\_post} error for representative schedules.}
 \label{fig:spectral}
 \end{figure}
 
-\textbf{Schedule sensitivity is larger in attention layers than in MLP layers.} The right side of Figure~\ref{fig:spectral} and Table~\ref{tab:module} show that attention matrices are much more sensitive to schedule choice than MLP matrices. For example, PE at $T=9$ has attention \texttt{g\_post} error 0.0481, while its MLP error is still about 0.7081. This suggests that the schedule-dependent spectral effect is not uniform across the Transformer; attention projections are the clearest location where improved singular-value control appears.
+\textbf{Schedule sensitivity is larger in attention layers than in MLP layers.} Table~\ref{tab:module} and the right panel of Figure~\ref{fig:spectral} break the \texttt{g\_post} error down by module type. The asymmetry is substantial. In attention layers, moving from Fast to PE $T=9$ reduces the error from $0.5146$ to $0.0481$---a reduction by a factor of about $10$. In MLP layers, the same schedule change reduces the error only from $0.7743$ to $0.7081$, a change of less than $10\%$.
 
-\textbf{The scalar maps explain where the geometry difference comes from.} For a schedule with $T$ NS steps, define the composed scalar map $p_T$ by repeatedly applying $p_k(\sigma)=a_k\sigma+b_k\sigma^3+c_k\sigma^5$. Figure~\ref{fig:single-step} first shows the one-step behavior: the Fast coefficient map amplifies small singular values much more strongly than the stable NS map, but it also has a region with negative derivative. This is why Fast behaves less like a conservative contraction and more like an aggressive spectral reshaping rule.
+This pattern suggests that attention projection matrices and MLP weight matrices experience different spectral regimes during training. MLP matrices appear to maintain a wider spread of singular values that is harder to fully orthogonalize even with deeper schedules, while attention projections respond more cleanly to increased schedule aggressiveness. One interpretation is that the effective rank of gradient directions is lower in attention layers, so a stronger polynomial can more efficiently collapse the singular-value distribution toward $1$. The result has a practical implication: if the goal is to tighten update geometry in a specific module, schedule depth matters most for attention layers, and adding NS steps beyond $T=5$ yields diminishing returns in MLP layers specifically.
 
-\begin{figure}[H]
+\subsection{Spectral Map Analysis}
+\label{sec:map}
+
+The geometry differences observed above have a precise mathematical origin: different schedules define different composed scalar maps on singular values, and these maps determine how aggressively small singular directions are promoted toward the polar-factor target.
+
+\textbf{Single-step behavior} For a schedule with $T$ NS steps, the composed scalar map $p_T$ is obtained by iterating $p_k(\sigma)=a_k\sigma+b_k\sigma^3+c_k\sigma^5$. Figure~\ref{fig:single-step} shows the single-step behavior. The Fast coefficient map amplifies small singular values much more strongly than the Stable NS map, but its derivative passes through zero and becomes negative in part of the input range. This means Fast behaves less like a conservative contraction and more like an aggressive spectral reshaping rule: it is not monotone in singular-value rank, and the mapping is order-reversing for certain input values. The key distinction between the Fast and Stable schedules is that instead of strictly attracting all singular values in $[0,1]$ toward $1$, the Fast map pushes them toward the range $[0.7, 1.3]$ and tolerates some oscillation around the target. The fact that Fast achieves the best training outcome suggests that validation loss is not monotone in the degree of semi-orthogonality: a moderate level of orthogonalization is beneficial, but maximally tight orthogonality is not necessary.
+
+\begin{figure}[h]
 \centering
-\includegraphics[width=0.86\linewidth]{figures/single_step_maps_derivatives.png}
-\caption{Single-step Newton--Schulz maps and derivatives for the stable and fast coefficient choices. The derivative panel shows where the map is locally amplifying or reversing order in singular-value space.}
+\includegraphics[width=0.86\linewidth]{figures/single_step_maps_derivatives.pdf}
+\caption{Single-step Newton--Schulz maps and derivatives for the Stable and Fast coefficient choices. The derivative panel shows where the map is locally amplifying or reversing order in singular-value space.}
 \label{fig:single-step}
 \end{figure}
 
-After several steps, these local differences accumulate into very different composed maps. Figure~\ref{fig:maps} shows that Vanilla moves small singular values slowly, Fast amplifies them more aggressively, and deeper Manual or PE schedules can push them much closer to the polar target. Figure~\ref{fig:derivatives} adds the derivative of the composed map. Large or oscillatory derivatives indicate that the final mapped value is highly sensitive to the input singular value, which helps explain why stronger orthogonalization is not automatically a better training update.
+\textbf{Composed maps and amplification} After several steps, the local single-step differences accumulate into very different overall maps. Left panel of Figure~\ref{fig:maps} illustrates this: Stable barely lifts small singular values, Fast produces a noticeably steeper rise, and deeper Manual or PE schedules push small singular values much closer to $1$. The right panel illustrates the composed-map behavior of PE under different lower-bound choices. The convergence behavior depends strongly on the lower-bound assumption $\ell$: PE with $\ell=10^{-3}$ effectively attracts all singular values above $10^{-3}$ to near $1$, while the alternative with $\ell=3\times10^{-5}$ exhibits oscillation across a wider input range, failing to produce a clean fixed-point attraction.
 
-\begin{table}[H]
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.86\linewidth]{figures/composed_maps.pdf}
+\caption{Composed singular-value maps $p_T(\sigma)$. The dashed identity line is the input; colored curves show the output after a full schedule. Schedules closer to the constant-$1$ line are closer to the ideal polar factor.}
+\label{fig:maps}
+\end{figure}
+
+Table~\ref{tab:maps} quantifies the amplification at the representative input $\sigma=10^{-5}$. The contrast is striking: Stable has an amplification ratio of only $32$, leaving a singular value of $10^{-5}$ still negligibly small at $3.2\times10^{-4}$. Fast raises the amplification ratio to $485$, but the output is still far from the polar target. Manual at $T=9$ reaches an amplification ratio of $4502$ and pushes the output to $4.5\times10^{-2}$, while PE at $T=9$ achieves an amplification ratio of $7.1\times10^4$, mapping $10^{-5}$ all the way to $0.713$---within striking distance of the ideal value of $1$. These numbers make the geometric improvement in Table~\ref{tab:spectral} interpretable: it is not that different schedules apply more iterations to the same map, but that they define fundamentally different maps, and a single application of a well-designed map can accomplish what many steps of a conservative map cannot.
+
+\begin{table}[h]
 \centering
 \caption{Small-singular-value amplification implied by the composed maps.}
 \label{tab:maps}
@@ -305,7 +323,7 @@ After several steps, these local differences accumulate into very different comp
 \toprule
 Method & $p_T(10^{-5})$ & $p_T(10^{-5})/10^{-5}$ \\
 \midrule
-Vanilla & $3.20\times 10^{-4}$ & 32 \\
+Stable & $3.20\times 10^{-4}$ & 32 \\
 Fast & $4.85\times 10^{-3}$ & 485 \\
 Manual $(T=9)$ & $4.50\times 10^{-2}$ & 4502 \\
 PE $(T=9)$ & $7.13\times 10^{-1}$ & 71309 \\
@@ -313,21 +331,20 @@ PE $(T=9)$ & $7.13\times 10^{-1}$ & 71309 \\
 \end{tabular}
 \end{table}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.86\linewidth]{figures/composed_maps.png}
-\caption{Composed singular-value maps. The dashed identity line is the input singular value $\sigma$; the colored curves show the value after applying a full schedule.}
-\label{fig:maps}
-\end{figure}
+\textbf{Spectral perturbation structure} Figure~\ref{fig:derivatives} plots the derivative $p_T'(\sigma)$ of each composed map. The most striking feature is that \emph{all} schedules saturate at the $\pm 20$ clip limit for $\sigma \lesssim 10^{-3}$: in the deep spectral tail every schedule is equally extreme, so that region alone cannot explain the performance differences observed between schedules.
 
-\begin{figure}[H]
+The informative region is the intermediate singular-value range $\sigma \in [0.01,\, 0.1]$, where gradient mass in typical language-model training is likely to concentrate. Here the schedules diverge qualitatively. Stable shows a smooth, monotonically decreasing derivative with no sign changes, meaning it preserves the relative ordering of singular directions throughout. Fast, by contrast, exhibits large oscillations with sign changes across this range, indicating that it actively inverts the importance ranking of some singular directions during orthogonalization. The deeper Manual and PE schedules have relatively flat derivatives in the moderate-$\sigma$ range, consistent with their role as maps that collapse the dominant spectral mass toward $1$ cleanly. PE with $\ell=3\times10^{-5}$ is an exception: the oscillatory behavior shifts to smaller $\sigma$, suggesting its polynomial is being stretched over a spectral interval that covers directions likely dominated by noise.
+
+These observations do not yield a simple causal explanation for the non-monotone relationship between orthogonality and training loss. Rather, they suggest that the schedules differ not only in \emph{how much} they reshape the spectrum but in \emph{which part} of the spectrum they perturb most and in what manner. Whether a given perturbation aids or hurts training ultimately depends on how the affected singular directions align with the loss landscape---a quantity not directly readable from the map structure.
+
+\begin{figure}[h]
 \centering
-\includegraphics[width=0.86\linewidth]{figures/composed_derivatives.png}
-\caption{Derivatives of the composed singular-value maps. The curves describe how sensitively the final mapped singular value changes with respect to the input singular value.}
+\includegraphics[width=0.86\linewidth]{figures/composed_derivatives.pdf}
+\caption{Derivatives of the composed singular-value maps, clipped to $[-20, 20]$. The schedules are indistinguishable in the deep spectral tail ($\sigma \lesssim 10^{-3}$) where all saturate; the qualitative differences emerge in the intermediate range where gradient mass is concentrated.}
 \label{fig:derivatives}
 \end{figure}
 
-The amplification ratio in Table~\ref{tab:maps} should be interpreted together with the mapped value. For example, PE at $T=9$ has a gain of about $7.1\times 10^4$ at $10^{-5}$ because it maps that singular value to about $0.713$, not because it pushes it beyond the polar target by the same factor. The lower-bound parameter in PE is therefore not a cosmetic hyperparameter: it changes the singular-value interval for which the polynomial is designed. This gives a natural explanation for the training results. Stronger spectral correction produces cleaner post-orthogonalization geometry, but the resulting update can also be more sensitive to the current spectrum of the stochastic gradient.
+Together, the composed-map analysis reveals that schedule choice shapes not only how aggressively the NS iteration pushes singular directions toward the polar target, but also which part of the gradient spectrum is most actively perturbed. Schedules that achieve better semi-orthogonality do so by applying stronger, qualitatively different maps---yet this does not translate monotonically into lower validation loss. The derivative structure suggests that each schedule perturbs a different spectral region in a different manner, but whether any particular perturbation is beneficial or harmful depends on how those singular directions align with the loss landscape, which the map alone cannot determine.
 
 \FloatBarrier
 
@@ -336,7 +353,7 @@ This project asked how different Newton--Schulz coefficient schedules change the
 
 The spectral evidence gives a more detailed picture. Different schedules produce different composed singular-value maps, and those maps are reflected in the measured geometry of real update matrices. Deeper Manual and PE schedules substantially reduce post-orthogonalization error, especially in attention layers. However, this cleaner geometry does not translate monotonically into lower validation loss: in the representative multi-seed runs, Fast remains the strongest practical baseline at 100M tokens, while the more orthogonal $T=9$ schedules are close but not better.
 
-Overall, the experiments suggest a balanced view of NS schedule design in Muon. Fast coefficients are highly effective for the present small-transformer pretraining setting, while Manual and PE schedules provide a more controllable way to reshape the spectrum and study the geometry of the update. The most interesting mathematical question left by the experiments is not simply how to make the update more orthogonal, but how the composed singular-value map should trade off amplification, sensitivity, and stability for the spectra that actually occur during training.
+Overall, the experiments suggest a balanced view of NS schedule design in Muon. Fast coefficients are highly effective for the present small-transformer pretraining setting, while Manual and PE schedules provide a more controllable way to reshape the spectrum and study the geometry of the update. The most interesting open question left by the experiments is not simply how to make the update more orthogonal, but how the composed singular-value map should be designed to perturb the \emph{right} spectral directions---those that are informative for the loss---rather than merely maximizing amplification across the board.
 
 \begingroup
 \footnotesize
